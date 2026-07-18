@@ -1,0 +1,144 @@
+name: release
+run-name: "release ${{ inputs.version || github.ref_name }}"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.2.3) — omit to derive from tag"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # create releases + upload assets
+
+jobs:
+  # ── 1. Resolve version ────────────────────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - name: Resolve version and tag
+        id: resolve
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "${{ github.ref_name }}" == v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.ref_name }}-$(date -u +%Y%m%d%H%M)"
+          fi
+          TAG="v${VERSION}"
+          PRERELEASE="${{ inputs.prerelease || 'false' }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (prerelease=$PRERELEASE)"
+
+  # ── 2. Build all CLI targets (cross-compile on Linux) ────────────────────
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build all targets
+        working-directory: packages/opencode
+        run: bun run script/build.ts --skip-embed-web-ui
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+
+      - name: Package archives
+        working-directory: packages/opencode/dist
+        run: |
+          for dir in opencode-*/; do
+            name="${dir%/}"
+            if echo "$name" | grep -q "windows"; then
+              zip -j "${name}.zip" "${name}/bin/opencode.exe"
+            else
+              tar -czf "${name}.tar.gz" -C "${name}/bin" opencode
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-dist
+          path: |
+            packages/opencode/dist/*.zip
+            packages/opencode/dist/*.tar.gz
+          retention-days: 7
+
+    outputs:
+      version: ${{ needs.version.outputs.version }}
+
+  # ── 3. Create GitHub Release and attach assets ────────────────────────────
+  release:
+    needs:
+      - version
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: opencode-dist
+          path: dist/
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          PRERELEASE_FLAG=""
+          [ "$PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
+
+          gh release create "$TAG" \
+            --title "opencode $TAG" \
+            --notes "$(cat <<'EOF'
+          ## Install
+
+          **macOS / Linux**
+          \`\`\`bash
+          curl -fsSL https://github.com/${{ github.repository }}/releases/download/$TAG/opencode-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/').tar.gz \
+            | tar -xz -C /usr/local/bin
+          \`\`\`
+
+          **Windows** — download `opencode-windows-x64.zip` below and add to `%PATH%`.
+
+          **RHEL8** — use `opencode-linux-x64-baseline.tar.gz` (no AVX2 requirement).
+
+          ## Authenticate with GitHub Copilot
+          \`\`\`bash
+          opencode auth github
+          \`\`\`
+          EOF
+          )" \
+            $PRERELEASE_FLAG \
+            dist/*
