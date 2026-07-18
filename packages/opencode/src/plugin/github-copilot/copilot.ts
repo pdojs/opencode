@@ -5,27 +5,13 @@ import { iife } from "@/util/iife"
 import { setTimeout as sleep } from "node:timers/promises"
 import { CopilotModels } from "./models"
 import { MessageV2 } from "@/session/message-v2"
+import { CLIENT_ID, apiBase, normalizeDomain, oauthUrls } from "./oauth"
 
-const CLIENT_ID = "Ov23li8tweQw6odWQebz"
 const API_VERSION = "2026-06-01"
 const UTILITY_MODELS = ["gpt-5.4-nano", "gpt-4.1", "gpt-4o", "gpt-4o-mini"]
 // Add a small safety buffer when polling to avoid hitting the server
 // slightly too early due to clock skew / timer drift.
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000 // 3 seconds
-function normalizeDomain(url: string) {
-  return url.replace(/^https?:\/\//, "").replace(/\/$/, "")
-}
-
-function getUrls(domain: string) {
-  return {
-    DEVICE_CODE_URL: `https://${domain}/login/device/code`,
-    ACCESS_TOKEN_URL: `https://${domain}/login/oauth/access_token`,
-  }
-}
-
-function base(enterpriseUrl?: string) {
-  return enterpriseUrl ? `https://copilot-api.${normalizeDomain(enterpriseUrl)}` : "https://api.githubcopilot.com"
-}
 
 // Check if a message is a synthetic user msg used to attach an image from a tool call
 function imgMsg(msg: any): boolean {
@@ -62,13 +48,13 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
       async models(provider, ctx) {
         if (ctx.auth?.type !== "oauth") {
           models = {}
-          return Object.fromEntries(Object.entries(provider.models).map(([id, model]) => [id, fix(model, base())]))
+          return Object.fromEntries(Object.entries(provider.models).map(([id, model]) => [id, fix(model, apiBase())]))
         }
 
         const auth = ctx.auth
 
         return CopilotModels.get(
-          base(auth.enterpriseUrl),
+          apiBase(auth.enterpriseUrl),
           {
             ...(provider.options?.headers as Record<string, string> | undefined),
             Authorization: `Bearer ${auth.refresh}`,
@@ -86,7 +72,7 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
           .catch((error) => {
             models = {}
             return Object.fromEntries(
-              Object.entries(provider.models).map(([id, model]) => [id, fix(model, base(auth.enterpriseUrl))]),
+              Object.entries(provider.models).map(([id, model]) => [id, fix(model, apiBase(auth.enterpriseUrl))]),
             )
           })
       },
@@ -229,9 +215,9 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
               domain = normalizeDomain(enterpriseUrl!)
             }
 
-            const urls = getUrls(domain)
+            const urls = oauthUrls(domain)
 
-            const deviceResponse = await fetch(urls.DEVICE_CODE_URL, {
+            const deviceResponse = await fetch(urls.deviceCode, {
               method: "POST",
               headers: {
                 Accept: "application/json",
@@ -261,7 +247,7 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
               method: "auto" as const,
               async callback() {
                 while (true) {
-                  const response = await fetch(urls.ACCESS_TOKEN_URL, {
+                  const response = await fetch(urls.accessToken, {
                     method: "POST",
                     headers: {
                       Accept: "application/json",
