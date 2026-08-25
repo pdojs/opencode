@@ -40,4 +40,10 @@ Flat, hyphenated, off `dev`, per repo convention (no `feature/`/`dev/` slash pre
 4. WS4 (agent-picker-ui) — can start in parallel with WS3 once WS2 exposes a manifest client + Location-binding call.
 5. WS5 (compose-dev-env) — last, integrates all of the above for a working demo.
 
-See `requirements.md` for Goal/Problem/Decisions/DoD and `design-proposal.md` for investigation, root cause, and per-workstream resolution/change surfaces.
+WS5's `VERIFY.md` should reference `test-requirements.md`'s three demo scripts (Demo 1 basic
+path, Demo 2 + steer/stop, Demo 3 + participant targeting) directly rather than duplicating
+their steps; author `VERIFY.md` as a short pointer plus environment-specific setup notes.
+
+See `requirements.md` for Goal/Problem/Decisions/DoD, `design-proposal.md` for investigation,
+root cause, and per-workstream resolution/change surfaces, and `test-requirements.md` for the
+three demo scripts used to validate the DoD end-to-end.

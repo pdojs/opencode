@@ -15,8 +15,42 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 - `packages/opencode/src/server/routes/instance/websocket-tracker.ts` + `groups/pty.ts`/`handlers/pty.ts` — existing WebSocket usage is scoped to interactive PTY only; a new WS surface is needed for the remote-agent tool-bridge channel (bidirectional), following the same tracker pattern.
 - `packages/tui/src/keymap.tsx:31-36,272-277` + `packages/tui/src/app.tsx:580-762` — command registration is just objects with `slashName`/`slashAliases` pushed into a keymap layer; adding `/agent` is additive, no registry rewrite needed.
 - MAF side: `_handoff.py` implements the workflow itself (`HandoffConfiguration`, `HandoffSentEvent`) but has **no server wrapper** — it is a Python library object (`Workflow`), not a network service. A FastAPI/WS wrapper must be authored from scratch in the container image; this is new code, not an existing gap in MAF to fix.
+- `agent-framework/python/samples/05-end-to-end/ag_ui_workflow_handoff/backend/server.py` — a real, working precedent for wrapping a handoff-style workflow in FastAPI/uvicorn (`add_agent_framework_fastapi_endpoint` from `agent_framework.ag_ui`, `HandoffBuilder`), though it speaks the AG-UI wire protocol, not the one this feature defines. Useful as a "run/iterate locally without Docker" reference (`uvicorn server:app --reload`, curl/websocket-client against `localhost`), not as code to reuse directly (different wire protocol, per Decision #1).
+
+## Testing Strategy
+
+Four layers, from fastest/most-deterministic to slowest/most-realistic. Layers 1-3 are fully automated (`bun test` / `pytest`), run in CI, and require no Docker or real LLM calls — they exercise the exact wire-protocol and tool-execution code paths so protocol bugs are caught long before the manual layer 4 pass. Layer 4 is the only layer that needs Docker, a real LLM, and a human, and mainly validates end-to-end operator UX and real-handoff behavior rather than protocol correctness.
+
+**Layer 1 — WS1 container contract tests (Python, no Docker, no real LLM)**
+- Grounded in `agent-framework/python/packages/orchestrations/tests/test_handoff.py`, which already tests `_handoff.py`'s handoff routing deterministically using `AsyncMock`/`MagicMock` fake chat clients (`test_handoff.py:6-40`) — no live model calls. WS1's server tests reuse this exact fixture style: build a two-fake-agent handoff workflow whose second agent is scripted to always claim the handoff tool, so the transcript and handoff sequence are deterministic and assertable.
+- New `tests/test_server.py` (colocated with WS1's `server.py`) drives the FastAPI app directly via `httpx.ASGITransport`/`TestClient` (HTTP) and the `websockets` test client (WS) against the in-process ASGI app — no `uvicorn`/Docker process needed. Asserts: `GET /agents/manifest` shape; a `user_message` frame against the deterministic fixture yields `assistant_delta`* → `handoff{source,target}` → `assistant_delta`* → `turn_complete` in order; a scripted tool-using fake agent produces a `tool_call` frame, and a `tool_result` frame sent back on the same socket unblocks the workflow and is reflected in the final transcript; an unrecognized `type` frame is rejected with an error frame, not a crash.
+- Run via `pytest` (or `uv run pytest`) from the sample directory, following existing `agent-framework` test conventions.
+
+**Layer 2 — WS2/WS3 automated integration tests (TypeScript, no Docker, no Python, no real network)**
+- New `packages/core/test/lib/remote-agent-server.ts`, a fake in-process WS server speaking the exact wire protocol from `remote-protocol.ts`/`protocol.py`, modeled directly on two existing precedents: `packages/opencode/test/lib/llm-server.ts` (scriptable queued-response fake server pattern) and `packages/opencode/test/plugin/openai-ws.test.ts` (spinning up a real `ws`-library `WebSocketServer` in-process and connecting a real client against it, e.g. `createWebSocketServer` helper at that file's bottom). It supports scripting a sequence of `assistant_delta`/`handoff`/`turn_complete`/`tool_call` frames and recording the `user_message`/`tool_result` frames the client sends back.
+- New `packages/core/test/session-runner-remote.test.ts` (naming matches existing siblings `session-runner-tool-events.test.ts`, `session-runner-model.test.ts` in the same directory). Reuses the `EventV2` capture-double pattern from `session-runner-tool-events.test.ts:14-33` (`EventV2.Service.of({ publish: ... captures into an array ... })`) to assert: `RemoteLocationRunner` opens the fake WS on `run()`, forwards each `assistant_delta` into the same `EventV2` shape `publish-llm-event.ts` produces (so the TUI needs no rendering change), publishes a `session.remote-handoff` event per `handoff` frame with `{source, target}`, and closes/cancels the socket when `SessionExecution.Service.interrupt` fires.
+- New `packages/core/test/remote-tool-bridge.test.ts` scripts the fake server to emit a `tool_call` for a mapped name (e.g. `"bash"`), and asserts: the real local `Tool.Def` (`ShellTool`) executes against a real temporary workspace directory (following the existing temp-dir fixture pattern used by other `packages/core/test/*` tool tests), the permission path is exercised via the same `Context.ask`/`Ruleset` evaluation already covered by `packages/core/test/policy.test.ts`'s `AppNodeBuilder.build`/`testEffect` harness (reused, not reinvented), the resulting `tool_result` frame is sent back on the fake socket with real command output, and an unmapped tool name yields an error `tool_result` frame rather than a crash or silent drop.
+- Run via `bun test` (existing `packages/core` test script), fully deterministic and CI-safe.
+
+**Layer 3 — WS4 picker-logic tests (TypeScript, no terminal rendering needed)**
+- The Native/Workspace/Remote `category` assignment (design change in WS4 step 2-3) is extracted as a small pure function so it is unit-testable without rendering the dialog, following the existing `packages/tui/test/context/local.test.ts` precedent (that file already unit-tests agent-list-adjacent logic from `context/local` in isolation). New/extended test asserts: native agents get `category: "Native"`, config/`.md`-defined agents get `category: "Workspace"`, manifest-derived entries get `category: "Remote"`, and section order is Native → Workspace → Remote regardless of input order (matches `DialogSelect`'s first-seen-order `groupBy`, `dialog-select.tsx:186-196`).
+- Run via `bun test` (existing `packages/tui` test script).
+
+**Layer 4 — WS5 real end-to-end (manual, Docker + real LLM required)**
+- `docker compose up` (WS5's `docker-compose.yml`) starts the real WS1 container image (built from its `Dockerfile`, not a fake) plus a Phoenix instance.
+- `VERIFY.md` is a concrete, repeatable script — not a vague checklist — with an expected observable result after each step:
+  1. Configure `remoteAgent.servers` in OpenCode pointing at the compose container's published port.
+  2. Start OpenCode per the repo dev convention: `tmux new-session -d -s opencode-dev 'bun dev'` from `packages/opencode`, then `tmux capture-pane -pt opencode-dev` to inspect output without blocking.
+  3. Run `/agent`; expect three headed sections (Native, Workspace, Remote) with the container's declared orchestrator visible under Remote.
+  4. Select the remote orchestrator; send a message designed to trigger a real handoff between two sample agents; expect incremental streamed text plus a visible handoff indicator naming the newly active agent.
+  5. Send a follow-up message while the turn is still streaming; expect it to steer/queue exactly as today's local sessions do (no separate "remote busy" UI state).
+  6. Prompt the active remote agent to run a real shell command or file edit; expect the existing local permission prompt to appear; approve it; then independently verify via a plain local `ls`/`cat` (outside OpenCode) that the real file/command effect exists in the actual workspace directory, not just echoed in the container.
+  7. Interrupt the session from the TUI; expect the WS connection to close or the container to log a cancellation.
+  8. Open the Phoenix UI (separate docker-compose service) and confirm an OTel trace exists for the same run, independent of the OpenCode interactive path.
+  9. `tmux kill-session -t opencode-dev` to clean up.
 
 ---
+
 
 ### WS1 — maf-container-server
 
@@ -30,19 +64,22 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 - `GET /agents/manifest` returns JSON listing at least one orchestrator with `{id, name, description, participants: [{id, name}]}`.
 - `WS /agents/{id}/session` accepts a JSON `{type: "user_message", text}` frame and streams back `{type: "assistant_delta", text}` frames followed by a `{type: "turn_complete"}` frame, with `{type: "handoff", source, target}` frames emitted whenever `HandoffSentEvent` fires.
 - The same WS channel accepts a `{type: "tool_result", call_id, output}` frame from the client and, when the active agent's tool schema includes a `bash`/`edit`-style tool, emits `{type: "tool_call", call_id, name, arguments}` requesting the client execute it (the container does **not** execute these itself).
+- The WS channel additionally accepts a `{type: "steer_to_agent", agent_id}` frame (used by WS4's participant-targeting UI, see Decision #7). **Constraint, confirmed by investigation**: `_handoff.py`'s routing is entirely LLM-tool-call-decided (`_create_handoff_tool`/`_is_handoff_requested`, `_handoff.py:124-127,335-346,487-`) — there is no `HandoffBuilder`/`Workflow` API to force-switch the active agent. `steer_to_agent` is therefore implemented as advisory: the server injects a synthetic, clearly-marked user-visible instruction ("The user has requested you hand off to `<agent_id>` now.") as the next turn's message to whichever agent currently holds the conversation, relying on that agent's already-wired `handoff_to_<target_id>` tool to comply. It is not a hard override, and sample agents' prompts must be written to reliably comply with explicit user handoff requests for the demo to be deterministic.
 - OTel exporter configured via `openinference-instrumentation-agent-framework`, pointed at a Phoenix collector endpoint from container env var, independently verified in the Phoenix UI.
 - `docker build` produces an image; running it standalone (`curl localhost:PORT/agents/manifest`) succeeds without OpenCode running.
 
 **Resolution via WBS**:
-1. Author `server.py` (FastAPI app) in a new `agent-framework`-adjacent sample/service directory (exact location TBD at implementation time — likely a new top-level `python/samples/05-end-to-end/opencode-handoff-bridge/` sibling to the existing `ag_ui_workflow_handoff` sample, mirroring its structure). Commit: `Container: add FastAPI manifest + WS chat server`.
-2. Wire `_handoff.py`'s workflow build function into the server's session lifecycle: one workflow instance per WS connection, replaying `HandoffSentEvent` and per-agent response streaming into the wire frames defined above. Commit: `Container: bridge handoff workflow events to WS frames`.
-3. Implement the tool-call request/response half of the protocol: intercept the active agent's tool invocations before local execution, emit `tool_call`, block on `tool_result` from the client with a timeout, and feed the result back into the agent's tool-call response. Commit: `Container: add tool-call bridge over WS`.
-4. Add `openinference-instrumentation-agent-framework` + OTel exporter config (env-var driven collector endpoint). Commit: `Container: wire OTel export to Phoenix`.
-5. Write `Dockerfile` for the server. Commit: `Container: add Dockerfile for handoff bridge server`.
+1. Author `server.py` (FastAPI app) in a new `agent-framework`-adjacent sample/service directory (exact location TBD at implementation time — likely a new top-level `python/samples/05-end-to-end/opencode-handoff-bridge/` sibling to the existing `ag_ui_workflow_handoff` sample, mirroring its structure), plus `tests/test_server.py` covering the `GET /agents/manifest` shape against a deterministic fake-agent fixture (see Testing Strategy Layer 1) in the same commit. Commit: `Container: add FastAPI manifest + WS chat server`.
+2. Wire `_handoff.py`'s workflow build function into the server's session lifecycle: one workflow instance per WS connection, replaying `HandoffSentEvent` and per-agent response streaming into the wire frames defined above; extend `tests/test_server.py` with the deterministic two-fake-agent handoff sequence assertion (`assistant_delta`* → `handoff` → `assistant_delta`* → `turn_complete`) in the same commit. Commit: `Container: bridge handoff workflow events to WS frames`.
+3. Implement the tool-call request/response half of the protocol: intercept the active agent's tool invocations before local execution, emit `tool_call`, block on `tool_result` from the client with a timeout, and feed the result back into the agent's tool-call response; extend `tests/test_server.py` with the tool-call/tool-result round-trip and the unrecognized-frame-type rejection case in the same commit. Commit: `Container: add tool-call bridge over WS`.
+4. Implement `steer_to_agent`: on receipt, construct the synthetic instruction message and inject it as the active agent's next input via the same code path `user_message` uses; extend `tests/test_server.py` with a deterministic three-fake-agent fixture asserting the targeted agent becomes active after a `steer_to_agent` frame. Commit: `Container: add steer_to_agent participant targeting`.
+5. Add `openinference-instrumentation-agent-framework` + OTel exporter config (env-var driven collector endpoint). Commit: `Container: wire OTel export to Phoenix`.
+6. Write `Dockerfile` for the server. Commit: `Container: add Dockerfile for handoff bridge server`.
 
 **Specific change surface** (new files, exact paths finalized during implementation):
 - `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/server.py` (new)
 - `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/protocol.py` (new — wire frame Pydantic models, shared contract WS2 will mirror in TypeScript)
+- `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/tests/test_server.py` (new — Layer 1 contract tests, deterministic fake-agent fixture modeled on `packages/orchestrations/tests/test_handoff.py`'s `AsyncMock`/`MagicMock` pattern)
 - `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/Dockerfile` (new)
 
 ---
@@ -60,21 +97,25 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 - Selecting a remote agent (from WS4's picker) sets the Session's `Location.workspaceID` to a value the new `RemoteLocationRunner` recognizes (e.g. `remote:<serverID>:<agentID>`).
 - `SessionRunner.Interface.run({sessionID, force})`, when resolved through this Location, opens/reuses the container's chat WebSocket instead of calling a local LLM provider, and publishes `EventV2` messages equivalent to today's `publish-llm-event.ts` output so the TUI's existing rendering path requires no changes to display streamed text.
 - `HandoffSentEvent`-derived frames are published as a new `EventV2` variant (e.g. `session.remote-handoff`) carrying `{source, target}`, consumed by WS4 for the "who's speaking" indicator.
-- Interrupting the session (`SessionExecution.Service.interrupt`) closes the remote WS connection or sends a cancellation frame, verified by the container observing disconnect/cancel.
+- Interrupting the session (`SessionExecution.Service.interrupt`) closes the remote WS connection or sends a cancellation frame, verified by the container observing disconnect/cancel. Since handoff routing is sequential (only one participant is ever active), interrupting while a specific participant is active is, in effect, "stopping that agent" — no separate per-participant interrupt exists or is needed.
+- A new `steerToAgent(agentID)` method on the remote runner sends a `steer_to_agent` frame on the existing chat WS (no new connection), used by WS4's participant-targeting UI (Decision #7). This is advisory per WS1's constraint — the method resolves once the container acknowledges receipt, not once the handoff actually occurs; the actual handoff (or lack thereof) is still observed via the normal `handoff` frame → `session.remote-handoff` event path.
 
 **Resolution via WBS**:
 1. Define `RemoteAgentConfig` schema in `packages/opencode/src/config/remote-agent.ts` following the `ConfigX` self-export pattern; wire into the root config merge. Commit: `Core: add remote agent server config schema`.
-2. Define the TypeScript mirror of WS1's wire protocol in `packages/core/src/session/execution/remote-protocol.ts` (kept in sync manually with the Python `protocol.py`; note as a known cross-repo drift risk, mitigated by a comment linking both files). Commit: `Core: add remote agent wire protocol types`.
-3. Implement `packages/core/src/session/execution/remote.ts` (`RemoteLocationRunner`) implementing the same runner interface as `local.ts`, translating between `SessionRunner.Interface.run` and the WS client (open connection, send `user_message`, forward `assistant_delta`/`handoff`/`turn_complete` into `EventV2` publishes via `publish-llm-event.ts`-equivalent helper). Commit: `Core: implement remote location runner`.
-4. Extend `LocationServiceMap` resolution to recognize `remote:*` workspaceIDs and route to the new runner. Commit: `Core: route remote Location IDs to RemoteLocationRunner`.
-5. Add a manifest-fetch client (`GET /agents/manifest`) used by WS4's picker, exposed as a small service function (e.g. `packages/opencode/src/remote-agent/manifest.ts`). Commit: `Core: add remote agent manifest client`.
+2. Define the TypeScript mirror of WS1's wire protocol in `packages/core/src/session/execution/remote-protocol.ts` (kept in sync manually with the Python `protocol.py`; note as a known cross-repo drift risk, mitigated by a comment linking both files). In the same commit, add `packages/core/test/lib/remote-agent-server.ts`, a fake in-process WS server speaking this protocol, modeled on `packages/opencode/test/lib/llm-server.ts` (scriptable queued responses) and `packages/opencode/test/plugin/openai-ws.test.ts` (real `ws`-library server-in-process pattern). Commit: `Core: add remote agent wire protocol types and fake server test helper`.
+3. Implement `packages/core/src/session/execution/remote.ts` (`RemoteLocationRunner`) implementing the same runner interface as `local.ts`, translating between `SessionRunner.Interface.run` and the WS client (open connection, send `user_message`, forward `assistant_delta`/`handoff`/`turn_complete` into `EventV2` publishes via `publish-llm-event.ts`-equivalent helper). Add `packages/core/test/session-runner-remote.test.ts` in the same commit, reusing the `EventV2` capture-double pattern from `session-runner-tool-events.test.ts:14-33` against the fake server from step 2. Commit: `Core: implement remote location runner`.
+4. Extend `LocationServiceMap` resolution to recognize `remote:*` workspaceIDs and route to the new runner; extend `session-runner-remote.test.ts` with a Location-resolution assertion in the same commit. Commit: `Core: route remote Location IDs to RemoteLocationRunner`.
+5. Add a manifest-fetch client (`GET /agents/manifest`) used by WS4's picker, exposed as a small service function (e.g. `packages/opencode/src/remote-agent/manifest.ts`), with a colocated unit test against the fake server. Commit: `Core: add remote agent manifest client`.
+6. Add `steerToAgent(agentID)` to `remote.ts`, sending the `steer_to_agent` frame on the already-open chat WS; extend `session-runner-remote.test.ts` to assert the frame is sent with the correct `agent_id` in the same commit. Commit: `Core: add steerToAgent participant targeting to remote runner`.
 
 **Specific change surface**:
 - `packages/opencode/src/config/remote-agent.ts` (new) — schema + merge wiring into whichever root config module composes `ConfigAgent`-style exports.
 - `packages/core/src/session/execution/remote-protocol.ts` (new)
+- `packages/core/test/lib/remote-agent-server.ts` (new — fake WS server test helper)
 - `packages/core/src/session/execution/remote.ts` (new)
+- `packages/core/test/session-runner-remote.test.ts` (new)
 - `packages/core/src/session/execution.ts` — extend Location resolution to dispatch to `remote.ts` (exact line range to confirm at implementation time by re-reading current file).
-- `packages/opencode/src/remote-agent/manifest.ts` (new)
+- `packages/opencode/src/remote-agent/manifest.ts` (new, with colocated test)
 
 ---
 
@@ -90,17 +131,18 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 - A `tool_call` frame received on the WS3 channel (opened by WS2's `RemoteLocationRunner`) is mapped to one of OpenCode's existing `Tool.Def` implementations (`ShellTool`, `EditTool`, `WriteTool`, `ReadTool`) based on a declared name mapping (e.g. remote `"bash"` → local `ShellTool`).
 - The mapped tool executes via the same `Context`/permission (`Ruleset`) path as a local agent's own tool calls — i.e. the user sees the same permission prompt they'd see if a local subagent ran the same shell command.
 - The tool's `ExecuteResult` is serialized into a `tool_result` frame and sent back over the same WS connection, unblocking the container's pending tool call.
-- A remote agent's shell command run through this bridge produces an observable side effect in the real local workspace directory (e.g. `ls` output reflects real files, `echo > file.txt` creates a real file) — proven via a manual end-to-end test, not a container-local mock.
+- A remote agent's shell command run through this bridge produces an observable side effect in a real local workspace directory — proven automatically in Layer 2 against a temp directory (`packages/core/test/remote-tool-bridge.test.ts`), and again manually in Layer 4 against the user's actual workspace.
 - An unmapped/disallowed remote tool name is rejected with a `tool_result` error frame rather than silently ignored or crashing the bridge.
 
 **Resolution via WBS**:
-1. Define the remote-tool-name → local `Tool.Def` mapping table in `packages/core/src/session/execution/remote-tool-bridge.ts`. Commit: `Core: add remote-to-local tool name mapping`.
-2. Implement the bridge: on receiving `tool_call`, resolve the mapped `Tool.Def`, construct a `Context` scoped to the bound Session/Location (same as local tool invocation path in `registry.ts`), execute, and send `tool_result`. Commit: `Core: implement remote tool-call bridge execution`.
-3. Ensure permission prompts route through the existing `Ruleset`/permission UI unchanged (verify by reusing `Context.ask`). Commit: `Core: gate remote tool calls through existing permission flow`.
-4. Add rejection/error path for unmapped tool names or execution failures. Commit: `Core: add remote tool-call error handling`.
+1. Define the remote-tool-name → local `Tool.Def` mapping table in `packages/core/src/session/execution/remote-tool-bridge.ts`, with a colocated `packages/core/test/remote-tool-bridge.test.ts` asserting the mapping table itself (e.g. `"bash"` → `ShellTool`) in the same commit. Commit: `Core: add remote-to-local tool name mapping`.
+2. Implement the bridge: on receiving `tool_call`, resolve the mapped `Tool.Def`, construct a `Context` scoped to the bound Session/Location (same as local tool invocation path in `registry.ts`), execute against a real temp workspace directory, and send `tool_result`; extend `remote-tool-bridge.test.ts` with the full round-trip assertion against the fake server from WS2 in the same commit. Commit: `Core: implement remote tool-call bridge execution`.
+3. Ensure permission prompts route through the existing `Ruleset`/permission UI unchanged, reusing `packages/core/test/policy.test.ts`'s `AppNodeBuilder.build`/`testEffect` harness to assert `Context.ask` is invoked on the bridge path; extend `remote-tool-bridge.test.ts` in the same commit. Commit: `Core: gate remote tool calls through existing permission flow`.
+4. Add rejection/error path for unmapped tool names or execution failures, with the corresponding test case added to `remote-tool-bridge.test.ts` in the same commit. Commit: `Core: add remote tool-call error handling`.
 
 **Specific change surface**:
 - `packages/core/src/session/execution/remote-tool-bridge.ts` (new)
+- `packages/core/test/remote-tool-bridge.test.ts` (new)
 - `packages/core/src/session/execution/remote.ts` (from WS2) — wire in the bridge on `tool_call` frame receipt.
 - `packages/opencode/src/tool/registry.ts` — expose a lookup function usable by the bridge to resolve a `Tool.Def` by name outside the normal per-agent assembly path (small addition, not a rewrite).
 
@@ -125,6 +167,7 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 - Selecting a remote orchestrator entry calls the session-binding action (sets Location per WS2) and closes the dialog; the next prompt submission drives the remote turn.
 - While a remote turn streams, the session view shows incremental text updates (reusing existing message rendering — no new rendering surface for the text itself) plus a status line/badge showing the currently active sub-agent name, updated on each relayed handoff frame.
 - Submitting a new prompt while a remote turn is in progress is accepted by the existing input component with the same steer/queue behavior local sessions already exhibit (no separate "remote busy" blocking state).
+- While bound to a remote session, a new in-session action (a slash command, e.g. `/participants`, opened from the same status area as the handoff indicator) lists the current orchestrator's `participants` from the manifest and lets the user pick one to either **steer toward** (sends `steerToAgent` per WS2) or **stop** (sends the existing session interrupt — see WS2 DoD note that stopping is equivalent to interrupting the whole turn since only one participant is ever active). This action is clearly labeled as best-effort/advisory in the UI copy itself (not just in this doc), consistent with WS1's constraint that there is no hard override.
 
 **Resolution via WBS**:
 1. Add `slashAliases: ["agent"]` to the existing `agent.list` command entry in `packages/tui/src/app.tsx`. Commit: `TUI: add /agent alias to agent picker command`.
@@ -132,10 +175,12 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 3. Fetch remote orchestrators via WS2's manifest client and append them as options with `category: "Remote"`, alongside the existing local list. Commit: `TUI: render remote agents section in agent picker`.
 4. Wire remote-entry selection to the Location-binding call from WS2. Commit: `TUI: bind session to selected remote agent`.
 5. Add a handoff status indicator subscribed to the new `session.remote-handoff` `EventV2` variant from WS2. Commit: `TUI: show active handoff agent indicator`.
+6. Add a new `dialog-participants.tsx` (or extend the existing dialog-select usage) listing the bound orchestrator's `participants` from the manifest, with two actions per entry ("Steer here" → `steerToAgent`, "Stop" → existing interrupt), registered as `/participants` alongside the handoff indicator; label the dialog copy as best-effort. Commit: `TUI: add participant steer/stop picker for remote sessions`.
 
 **Specific change surface**:
-- `packages/tui/src/app.tsx` — add `slashAliases` to the existing command entry (confirm exact line range at implementation time).
+- `packages/tui/src/app.tsx` — add `slashAliases` to the existing command entry (confirm exact line range at implementation time), and register the new `/participants` command.
 - `packages/tui/src/component/dialog-agent.tsx` — replace the flat `local.agent.list()` mapping with `category`-tagged Native/Workspace options, append Remote options from WS2's manifest client, and add remote-selection handling.
+- `packages/tui/src/component/dialog-participants.tsx` (new) — participant list + steer/stop actions.
 - `packages/tui/src/routes/session/index.tsx` (or nearest session-status rendering component, to confirm at implementation time) — handoff indicator.
 
 ---
