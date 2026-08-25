@@ -1,0 +1,304 @@
+"""Layer 1 contract tests for the FastAPI/WebSocket bridge (design-proposal.md WS1, Testing
+Strategy Layer 1). Uses deterministic fake `Agent`/`BaseChatClient` fixtures modeled directly
+on `agent-framework/python/packages/orchestrations/tests/test_handoff.py`'s `MockChatClient`/
+`MockHandoffAgent` pattern — no real LLM calls, no network egress.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterable, Awaitable, Mapping, Sequence
+from typing import Any
+
+from agent_framework import (
+    Agent,
+    ChatResponse,
+    ChatResponseUpdate,
+    Content,
+    Message,
+    ResponseStream,
+)
+from agent_framework._clients import BaseChatClient
+from agent_framework._middleware import ChatMiddlewareLayer
+from agent_framework._tools import FunctionInvocationLayer
+from agent_framework_orchestrations import HandoffBuilder
+from fastapi.testclient import TestClient
+
+from app.orchestrator import OrchestratorSpec, make_run_local_command_tool
+from app.server import create_app
+
+
+class MockChatClient(FunctionInvocationLayer[Any], ChatMiddlewareLayer[Any], BaseChatClient[Any]):
+    """Deterministic fake chat client: replies with a fixed handoff (or plain text) each call,
+    unless the latest user message contains an explicit "hand off to '<target>'" instruction
+    (as sent by our server's `steer_to_agent` handling), in which case it hands off to that
+    target instead — mirroring the `_HANDOFF_COMPLIANCE_INSTRUCTION` behavior real sample
+    agents are prompted to exhibit (see orchestrator.py).
+    """
+
+    def __init__(self, *, name: str, handoff_to: str | None = None) -> None:
+        ChatMiddlewareLayer.__init__(self)
+        FunctionInvocationLayer.__init__(self)
+        BaseChatClient.__init__(self)
+        self._name = name
+        self._handoff_to = handoff_to
+        self._call_index = 0
+
+    def _inner_get_response(
+        self,
+        *,
+        messages: Sequence[Message],
+        stream: bool,
+        options: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+        handoff_to = self._resolve_handoff_target(messages)
+
+        if stream:
+            return self._build_streaming_response(handoff_to=handoff_to)
+
+        async def _get() -> ChatResponse:
+            contents = _build_reply_contents(self._name, handoff_to, self._next_call_id(handoff_to))
+            return ChatResponse(messages=Message(role="assistant", contents=contents), response_id="mock_response")
+
+        return _get()
+
+    def _build_streaming_response(self, *, handoff_to: str | None) -> ResponseStream[ChatResponseUpdate, ChatResponse]:
+        async def _stream() -> AsyncIterable[ChatResponseUpdate]:
+            contents = _build_reply_contents(self._name, handoff_to, self._next_call_id(handoff_to))
+            yield ChatResponseUpdate(contents=contents, role="assistant", finish_reason="stop")
+
+        def _finalize(updates: Sequence[ChatResponseUpdate]) -> ChatResponse:
+            return ChatResponse.from_updates(updates)
+
+        return ResponseStream(_stream(), finalizer=_finalize)
+
+    def _resolve_handoff_target(self, messages: Sequence[Message]) -> str | None:
+        for message in reversed(messages):
+            if message.role != "user":
+                continue
+            text = message.text or ""
+            if "hand off to '" in text:
+                return text.split("hand off to '", 1)[1].split("'", 1)[0]
+            break
+        return self._handoff_to
+
+    def _next_call_id(self, handoff_to: str | None) -> str | None:
+        if not handoff_to:
+            return None
+        call_id = f"{self._name}-handoff-{self._call_index}"
+        self._call_index += 1
+        return call_id
+
+
+def _build_reply_contents(agent_name: str, handoff_to: str | None, call_id: str | None) -> list[Content]:
+    contents: list[Content] = []
+    if handoff_to and call_id:
+        contents.append(
+            Content.from_function_call(call_id=call_id, name=f"handoff_to_{handoff_to}", arguments={"handoff_to": handoff_to})
+        )
+    contents.append(Content.from_text(text=f"{agent_name} reply"))
+    return contents
+
+
+def _mock_agent(name: str, handoff_to: str | None = None) -> Agent:
+    return Agent(
+        client=MockChatClient(name=name, handoff_to=handoff_to),
+        name=name,
+        id=name,
+        require_per_service_call_history_persistence=True,
+    )
+
+
+def _noop_run_local_command(_command: str) -> Any:
+    raise AssertionError("run_local_command should not be invoked by these fixtures")
+
+
+def _two_agent_handoff_spec() -> OrchestratorSpec:
+    # `alpha` always hands off to `beta`; `beta` never hands off, so after its reply the
+    # workflow requests the next user input (human-in-loop default) — this proves the
+    # assistant_delta* -> handoff -> assistant_delta* -> turn_complete frame sequence.
+    def build(run_local_command: Any) -> Any:
+        del run_local_command
+        alpha = _mock_agent("alpha", handoff_to="beta")
+        beta = _mock_agent("beta")
+        return HandoffBuilder(name="demo", participants=[alpha, beta]).with_start_agent(alpha).build()
+
+    return OrchestratorSpec(
+        id="demo", name="Demo", description="two-agent handoff fixture", participant_ids=("alpha", "beta"), build=build
+    )
+
+
+def _three_agent_spec() -> OrchestratorSpec:
+    # None of the three hand off on their own; a `steer_to_agent` frame is the only thing that
+    # causes a handoff, proving the advisory-nudge mechanism in isolation from any "agent
+    # decided to hand off anyway" ambiguity.
+    def build(run_local_command: Any) -> Any:
+        del run_local_command
+        alpha = _mock_agent("alpha")
+        beta = _mock_agent("beta")
+        gamma = _mock_agent("gamma")
+        return HandoffBuilder(name="demo3", participants=[alpha, beta, gamma]).with_start_agent(alpha).build()
+
+    return OrchestratorSpec(
+        id="demo3",
+        name="Demo3",
+        description="three-agent steer fixture",
+        participant_ids=("alpha", "beta", "gamma"),
+        build=build,
+    )
+
+
+def test_manifest_shape() -> None:
+    app = create_app(orchestrators=[_two_agent_handoff_spec()])
+    client = TestClient(app)
+
+    response = client.get("/agents/manifest")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "orchestrators": [
+            {
+                "id": "demo",
+                "name": "Demo",
+                "description": "two-agent handoff fixture",
+                "participants": [{"id": "alpha", "name": "alpha"}, {"id": "beta", "name": "beta"}],
+            }
+        ]
+    }
+
+
+def test_handoff_sequence_streams_expected_frames() -> None:
+    app = create_app(orchestrators=[_two_agent_handoff_spec()])
+    client = TestClient(app)
+
+    with client.websocket_connect("/agents/demo/session") as ws:
+        ws.send_json({"type": "user_message", "text": "I need help"})
+
+        frames = []
+        while True:
+            frame = ws.receive_json()
+            frames.append(frame)
+            if frame["type"] == "turn_complete":
+                break
+
+        types = [frame["type"] for frame in frames]
+        assert types == ["assistant_delta", "handoff", "assistant_delta", "turn_complete"]
+        assert frames[0]["agent_id"] == "alpha"
+        assert frames[1] == {"type": "handoff", "source": "alpha", "target": "beta"}
+        assert frames[2]["agent_id"] == "beta"
+
+
+def test_unrecognized_frame_type_is_rejected() -> None:
+    app = create_app(orchestrators=[_two_agent_handoff_spec()])
+    client = TestClient(app)
+
+    with client.websocket_connect("/agents/demo/session") as ws:
+        ws.send_json({"type": "not_a_real_frame"})
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+
+
+def test_steer_to_agent_targets_participant() -> None:
+    app = create_app(orchestrators=[_three_agent_spec()])
+    client = TestClient(app)
+
+    with client.websocket_connect("/agents/demo3/session") as ws:
+        ws.send_json({"type": "user_message", "text": "hello"})
+        frames = _drain_until_turn_complete(ws)
+        assert [f["type"] for f in frames] == ["assistant_delta", "turn_complete"]
+        assert frames[0]["agent_id"] == "alpha"
+
+        ws.send_json({"type": "steer_to_agent", "agent_id": "gamma"})
+        frames = _drain_until_turn_complete(ws)
+        types = [f["type"] for f in frames]
+        assert "handoff" in types
+        handoff_frame = next(f for f in frames if f["type"] == "handoff")
+        assert handoff_frame == {"type": "handoff", "source": "alpha", "target": "gamma"}
+
+
+def test_tool_call_bridge_round_trip() -> None:
+    def build(run_local_command: Any) -> Any:
+        agent = Agent(
+            client=_ToolCallingMockChatClient(),
+            name="assistant",
+            id="assistant",
+            tools=[make_run_local_command_tool(run_local_command)],
+            require_per_service_call_history_persistence=True,
+        )
+        return HandoffBuilder(name="tool-demo", participants=[agent]).with_start_agent(agent).build()
+
+    spec = OrchestratorSpec(id="tool-demo", name="Tool Demo", description="tool bridge fixture", participant_ids=("assistant",), build=build)
+    app = create_app(orchestrators=[spec])
+    client = TestClient(app)
+
+    with client.websocket_connect("/agents/tool-demo/session") as ws:
+        ws.send_json({"type": "user_message", "text": "run echo hi"})
+
+        tool_call = ws.receive_json()
+        assert tool_call["type"] == "tool_call"
+        assert tool_call["name"] == "run_local_command"
+        assert tool_call["arguments"] == {"command": "echo hi"}
+
+        ws.send_json({"type": "tool_result", "call_id": tool_call["call_id"], "output": "ran: echo hi"})
+
+        frames = _drain_until_turn_complete(ws)
+        assert any(f["type"] == "assistant_delta" and "ran: echo hi" in f["text"] for f in frames)
+
+
+class _ToolCallingMockChatClient(FunctionInvocationLayer[Any], ChatMiddlewareLayer[Any], BaseChatClient[Any]):
+    """First call: emit a `run_local_command` function call. Second call (after the function
+    result is fed back by `FunctionInvocationLayer`): echo the tool result in plain text so the
+    round trip is observable end-to-end.
+    """
+
+    def __init__(self) -> None:
+        ChatMiddlewareLayer.__init__(self)
+        FunctionInvocationLayer.__init__(self)
+        BaseChatClient.__init__(self)
+        self._call_index = 0
+
+    def _inner_get_response(
+        self,
+        *,
+        messages: Sequence[Message],
+        stream: bool,
+        options: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> Awaitable[ChatResponse] | ResponseStream[ChatResponseUpdate, ChatResponse]:
+        tool_result_text = self._find_tool_result(messages)
+
+        if tool_result_text is None:
+            contents: list[Content] = [
+                Content.from_function_call(call_id="call-1", name="run_local_command", arguments={"command": "echo hi"})
+            ]
+        else:
+            contents = [Content.from_text(text=f"done: {tool_result_text}")]
+
+        async def _get() -> ChatResponse:
+            return ChatResponse(messages=Message(role="assistant", contents=contents), response_id="mock_response")
+
+        if stream:
+            async def _stream() -> AsyncIterable[ChatResponseUpdate]:
+                yield ChatResponseUpdate(contents=contents, role="assistant", finish_reason="stop")
+
+            return ResponseStream(_stream(), finalizer=lambda updates: ChatResponse.from_updates(updates))
+
+        return _get()
+
+    def _find_tool_result(self, messages: Sequence[Message]) -> str | None:
+        for message in messages:
+            for content in message.contents:
+                if getattr(content, "type", None) == "function_result" and getattr(content, "call_id", None) == "call-1":
+                    return str(content.result)
+        return None
+
+
+def _drain_until_turn_complete(ws: Any) -> list[dict]:
+    frames = []
+    while True:
+        frame = ws.receive_json()
+        frames.append(frame)
+        if frame["type"] == "turn_complete":
+            break
+    return frames
