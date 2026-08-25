@@ -108,28 +108,34 @@ Grounded via direct exploration of `/Users/pdops/projects/opencode` and `/Users/
 
 ### WS4 — agent-picker-ui
 
-**Goal**: `/agent` (new) and `/agents` (existing) both open a single dialog listing local subagents and remote MAF containers; selecting a remote entry binds the session per WS2, and the TUI shows live remote-turn status (streaming text + current handoff holder).
+**Goal**: `/agent` (new) and `/agents` (existing) both open a single dialog listing agents grouped into three visually separated sections — **Native** (built-in TUI agents), **Workspace** (`.md`/config-defined agents in the project), and **Remote** (MAF containers) — using the picker's existing category-grouping mechanism. Selecting a remote entry binds the session per WS2, and the TUI shows live remote-turn status (streaming text + current handoff holder).
 
-**Problem**: `<DialogAgent />` only lists local `Agent.Info` entries; there is no remote section, no `/agent` alias, and no rendering for handoff/"who's speaking" status.
+**Problem**: `<DialogAgent />` renders a single flat list with no grouping at all — today's `description: item.native ? "native" : item.description` (`dialog-agent.tsx:15`) only distinguishes native vs. non-native *textually* in the description column, not as a visual section. There is no remote section, no `/agent` alias, and no rendering for handoff/"who's speaking" status.
 
-**Investigation/root cause**: `packages/tui/src/app.tsx:679-686` registers only `slashName: "agents"` on the existing command; `packages/tui/src/component/dialog-agent.tsx` renders only `Agent.Service.list()`. Confirmed no remote-section concept exists.
+**Investigation/root cause**:
+- `packages/tui/src/app.tsx:679-686` registers only `slashName: "agents"` on the existing command.
+- `packages/tui/src/component/dialog-agent.tsx:1-31` (full file) renders every `local.agent.list()` entry flat, with `description: item.native ? "native" : item.description` (line 15) as the only native/non-native signal — no `category` is set on any option today.
+- `packages/opencode/src/agent/agent.ts:39` — `Info.native: Schema.optional(Schema.Boolean)` is the existing flag: `true` for built-in agents (`agent.ts:154,180,194,217,222,238,254` — `build`, `plan`, `explore`, etc.), `false` for every agent instantiated from project config at `agent.ts:279` inside the `for (const [key, value] of Object.entries(cfg.agent ?? {}))` loop — i.e. every agent defined via config or `.md` frontmatter (`packages/opencode/src/config/agent.ts`, `packages/opencode/src/config/markdown.ts`) ends up `native: false`. This is the exact boundary needed for a "Native" vs. "Workspace" split — no new flag is needed, `native` already means precisely this.
+- `packages/tui/src/ui/dialog-select.tsx:186-196` (`grouped` memo) — `DialogSelectOption` already has a `category`/`categoryView` field (`dialog-select.tsx:65-66`); `groupBy((x) => x.category ?? "")` renders a header per distinct category, in first-seen order, whenever `category` is non-empty (confirmed by `rows` memo at lines 204-209 which reserves header rows only `if (!category) return acc`). This is an existing, working grouping mechanism — no new UI primitive is needed, only supplying `category` per option.
 
 **Definition of Done**:
 - Typing `/agent` or `/agents` opens the same dialog; both are visible as slash suggestions in the prompt autocomplete (`packages/tui/src/component/prompt/autocomplete.tsx`).
-- The dialog shows a "Remote Agents" section populated by calling WS2's manifest client for each configured `remoteAgent.servers` entry, showing name/description per orchestrator.
+- The dialog shows three visually distinct, separately-headed groups in this order: **Native** (agents with `native === true`), **Workspace** (agents with `native === false`, i.e. config/`.md`-defined), **Remote** (entries populated by calling WS2's manifest client for each configured `remoteAgent.servers` entry, showing name/description per orchestrator).
+- Each local agent's `description` column keeps showing its actual description (not the literal string `"native"`) now that native/non-native is conveyed by the section header instead of overloading the description field — i.e. `dialog-agent.tsx`'s `description: item.native ? "native" : item.description` special-case is removed since grouping now carries that meaning.
 - Selecting a remote orchestrator entry calls the session-binding action (sets Location per WS2) and closes the dialog; the next prompt submission drives the remote turn.
 - While a remote turn streams, the session view shows incremental text updates (reusing existing message rendering — no new rendering surface for the text itself) plus a status line/badge showing the currently active sub-agent name, updated on each relayed handoff frame.
 - Submitting a new prompt while a remote turn is in progress is accepted by the existing input component with the same steer/queue behavior local sessions already exhibit (no separate "remote busy" blocking state).
 
 **Resolution via WBS**:
 1. Add `slashAliases: ["agent"]` to the existing `agent.list` command entry in `packages/tui/src/app.tsx`. Commit: `TUI: add /agent alias to agent picker command`.
-2. Extend `dialog-agent.tsx` to fetch and render a "Remote Agents" section via WS2's manifest client, alongside the existing local list. Commit: `TUI: render remote agents section in agent picker`.
-3. Wire remote-entry selection to the Location-binding call from WS2. Commit: `TUI: bind session to selected remote agent`.
-4. Add a handoff status indicator subscribed to the new `session.remote-handoff` `EventV2` variant from WS2. Commit: `TUI: show active handoff agent indicator`.
+2. In `dialog-agent.tsx`, set `category: item.native ? "Native" : "Workspace"` on each local-agent option (removing the old `item.native ? "native" : item.description` description override) so the existing `DialogSelect` grouping renders the two local sections. Commit: `TUI: group agent picker into Native and Workspace sections`.
+3. Fetch remote orchestrators via WS2's manifest client and append them as options with `category: "Remote"`, alongside the existing local list. Commit: `TUI: render remote agents section in agent picker`.
+4. Wire remote-entry selection to the Location-binding call from WS2. Commit: `TUI: bind session to selected remote agent`.
+5. Add a handoff status indicator subscribed to the new `session.remote-handoff` `EventV2` variant from WS2. Commit: `TUI: show active handoff agent indicator`.
 
 **Specific change surface**:
 - `packages/tui/src/app.tsx` — add `slashAliases` to the existing command entry (confirm exact line range at implementation time).
-- `packages/tui/src/component/dialog-agent.tsx` — add remote section + selection handler.
+- `packages/tui/src/component/dialog-agent.tsx` — replace the flat `local.agent.list()` mapping with `category`-tagged Native/Workspace options, append Remote options from WS2's manifest client, and add remote-selection handling.
 - `packages/tui/src/routes/session/index.tsx` (or nearest session-status rendering component, to confirm at implementation time) — handoff indicator.
 
 ---
