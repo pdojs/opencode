@@ -31,6 +31,8 @@ from .protocol import (
     TurnCompleteFrame,
     UserMessageFrame,
 )
+from .telemetry import configure_telemetry
+
 logger = logging.getLogger("remote_maf_handoff_bridge")
 
 # Timeout for a single client-executed tool call round trip. Chosen generously since it covers
@@ -44,6 +46,7 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
     """
 
     registry = {spec.id: spec for spec in (orchestrators if orchestrators is not None else default_orchestrators())}
+    configure_telemetry()
     app = FastAPI(title="opencode-remote-maf-handoff-bridge")
 
     @app.get("/agents/manifest", response_model=Manifest)
