@@ -91,4 +91,32 @@ describe("remote-agent HttpApi", () => {
       } as never,
     },
   )
+
+  it.instance(
+    "reports an undelivered steer when the session has no open remote connection",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const handler = HttpApiApp.webHandler()
+        const response = yield* request(handler, RemoteAgentPaths.steer, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionID: "ses_missing", agentID: "refunds" }),
+        })
+
+        // Steering is advisory and rides a Session's live turn socket, so a session with no
+        // turn in flight is a normal 200 with `delivered: false` rather than an error — the
+        // TUI surfaces that distinction as a "nothing to steer" warning.
+        expect(response.status).toBe(200)
+        const body = yield* json<{ delivered: boolean }>(response)
+        expect(body.delivered).toBe(false)
+      }),
+    {
+      config: {
+        remote_agent: {
+          servers: [{ id: "bridge-1", url: "http://127.0.0.1:1" }],
+        },
+      } as never,
+    },
+  )
 })
