@@ -69,7 +69,9 @@ class OrchestratorSpec:
     name: str
     description: str
     participant_ids: tuple[str, ...]
-    build: Callable[[RunLocalCommand], Workflow]
+    # `start_agent` selects which participant the conversation begins with; None uses the
+    # workflow's own default. Lets a client address any agent in the network directly.
+    build: Callable[[RunLocalCommand, str | None], Workflow]
 
     def manifest_entry(self) -> OrchestratorManifestEntry:
         return OrchestratorManifestEntry(
@@ -99,7 +101,7 @@ def make_run_local_command_tool(run_local_command: RunLocalCommand):
     )
 
 
-def _build_sample_support_workflow(run_local_command: RunLocalCommand) -> Workflow:
+def _build_sample_support_workflow(run_local_command: RunLocalCommand, start_agent: str | None = None) -> Workflow:
     local_command_tool = make_run_local_command_tool(run_local_command)
 
     # Defaults to a low-cost chat model for manual/demo runs (overridable via OPENAI_CHAT_MODEL)
@@ -126,13 +128,14 @@ def _build_sample_support_workflow(run_local_command: RunLocalCommand) -> Workfl
         tools=[local_command_tool],
         require_per_service_call_history_persistence=True,
     )
+    agents = {"triage": triage, "billing": billing, "refunds": refunds}
     return (
         HandoffBuilder(
             name="support",
             description="Support triage handoff group: triage, billing, refunds",
             participants=[triage, billing, refunds],
         )
-        .with_start_agent(triage)
+        .with_start_agent(agents.get(start_agent or "triage", triage))
         .build()
     )
 
