@@ -8,9 +8,9 @@ import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import * as InstanceState from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import { Effect, Layer } from "effect"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { RemoteAgentServerNotFoundError, SelectPayload, SteerPayload } from "../groups/remote-agent"
+import { ReleasePayload, RemoteAgentServerNotFoundError, SelectPayload, SteerPayload } from "../groups/remote-agent"
 
 export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote-agent", (handlers) =>
   Effect.gen(function* () {
@@ -83,6 +83,30 @@ export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote
       return { sessionID: ctx.payload.sessionID, workspaceID }
     })
 
+    /**
+     * Returns a Session to the local project. `select` overwrites `workspaceID` without keeping
+     * the previous value, so there is nothing to restore to but the Location this instance is
+     * serving — which is exactly what `Session.create` assigns to a fresh session, making the
+     * round trip symmetric for the single-workspace case.
+     *
+     * Ends the remote conversation. The MAF workflow lives for the lifetime of the bridge
+     * connection and has no resume-by-id API, so closing the socket discards it (see
+     * design-proposal.md WS2 deviations).
+     */
+    const release = Effect.fn("RemoteAgentHttpApi.release")(function* (ctx: {
+      payload: typeof ReleasePayload.Type
+    }) {
+      const current = yield* session.get(ctx.payload.sessionID).pipe(Effect.catchTag("NotFoundError", () => new HttpApiError.BadRequest()))
+      if (!current.workspaceID || !SessionRunnerRemote.isRemoteWorkspaceID(current.workspaceID))
+        return { sessionID: ctx.payload.sessionID, workspaceID: current.workspaceID, released: false }
+
+      yield* SessionRunnerRemote.closeConnection(ctx.payload.sessionID, "released by user")
+      const workspaceID = yield* InstanceState.workspaceID
+      yield* session.setWorkspace({ sessionID: ctx.payload.sessionID, workspaceID })
+
+      return { sessionID: ctx.payload.sessionID, workspaceID, released: true }
+    })
+
     // `steerToAgent` reads SessionRunnerRemote's module-level connection map rather than a
     // Location-scoped service, so it needs no Location provision here — a Session's open remote
     // socket is reachable from any entry point, including the V1 prompt path that owns it.
@@ -91,6 +115,6 @@ export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote
       return { delivered }
     })
 
-    return handlers.handle("list", list).handle("select", select).handle("steer", steer)
+    return handlers.handle("list", list).handle("select", select).handle("release", release).handle("steer", steer)
   }),
 ).pipe(Layer.provide(locationServiceMapLayer))

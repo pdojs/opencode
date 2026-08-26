@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { RemoteAgentPaths } from "../../src/server/routes/instance/httpapi/groups/remote-agent"
+import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -110,6 +111,60 @@ describe("remote-agent HttpApi", () => {
         expect(response.status).toBe(200)
         const body = yield* json<{ delivered: boolean }>(response)
         expect(body.delivered).toBe(false)
+      }),
+    {
+      config: {
+        remote_agent: {
+          servers: [{ id: "bridge-1", url: "http://127.0.0.1:1" }],
+        },
+      } as never,
+    },
+  )
+
+  it.instance(
+    "releases a bound session back to the local project",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const handler = HttpApiApp.webHandler()
+
+        const created = yield* request(handler, SessionPaths.create, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        })
+        const session = yield* json<{ id: string; workspaceID?: string }>(created)
+        const localWorkspaceID = session.workspaceID
+
+        const selected = yield* request(handler, RemoteAgentPaths.select, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionID: session.id, serverID: "bridge-1", orchestratorID: "support" }),
+        })
+        expect(selected.status).toBe(200)
+        expect((yield* json<{ workspaceID: string }>(selected)).workspaceID).toBe("remote:bridge-1:support")
+
+        const released = yield* request(handler, RemoteAgentPaths.release, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionID: session.id }),
+        })
+        expect(released.status).toBe(200)
+        expect(yield* json<{ released: boolean }>(released)).toMatchObject({ released: true })
+
+        // The binding must be gone from the session itself, not just reported as released:
+        // routing follows the session's Location, so anything left behind keeps it remote.
+        const after = yield* request(handler, `/session/${session.id}`, tmp.directory)
+        expect((yield* json<{ workspaceID?: string }>(after)).workspaceID).toBe(localWorkspaceID)
+
+        // Releasing an already-local session is a no-op rather than an error, so a user picking
+        // a local agent twice does not see a spurious failure.
+        const again = yield* request(handler, RemoteAgentPaths.release, tmp.directory, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionID: session.id }),
+        })
+        expect(yield* json<{ released: boolean }>(again)).toMatchObject({ released: false })
       }),
     {
       config: {
