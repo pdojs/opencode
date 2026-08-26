@@ -27,6 +27,7 @@ from agent_framework_orchestrations import HandoffBuilder
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app import sessions
 from app.orchestrator import OrchestratorSpec, make_run_local_command_tool
 from app.server import create_app
 
@@ -372,6 +373,78 @@ class _ToolCallingMockChatClient(FunctionInvocationLayer[Any], ChatMiddlewareLay
                 if getattr(content, "type", None) == "function_result" and getattr(content, "call_id", None) == "call-1":
                     return str(content.result)
         return None
+
+
+def _solo_capable_spec() -> OrchestratorSpec:
+    """Same participants as the handoff fixture, but also able to hand one out standalone."""
+
+    def build(run_local_command: Any, start_agent: str | None = None, workflow_name: str | None = None) -> Any:
+        del run_local_command, start_agent, workflow_name
+        alpha = _mock_agent("alpha", handoff_to="beta")
+        beta = _mock_agent("beta")
+        return HandoffBuilder(name="solo-demo", participants=[alpha, beta]).with_start_agent(alpha).build()
+
+    def build_agent(run_local_command: Any, participant_id: str) -> Any:
+        del run_local_command
+        return _mock_agent(participant_id)
+
+    return OrchestratorSpec(
+        id="solo",
+        name="Solo",
+        description="solo-capable fixture",
+        participant_ids=("alpha", "beta"),
+        build=build,
+        build_agent=build_agent,
+    )
+
+
+def test_solo_session_answers_from_the_named_agent_without_handoff(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(sessions, "SESSION_DIR", tmp_path)
+    client = TestClient(create_app([_solo_capable_spec()]))
+
+    with client.websocket_connect("/agents/solo/session?solo=true&start_agent=beta&session_id=s1") as ws:
+        ws.send_json({"type": "user_message", "text": "hello"})
+        frames = _drain_until_turn_complete(ws)
+
+    # `alpha` is the workflow's start agent and hands off; addressing `beta` solo must bypass both.
+    assert not any(f["type"] == "handoff" for f in frames)
+    assert [f["agent_id"] for f in frames if f["type"] == "assistant_delta"] == ["beta"]
+
+
+def test_solo_session_is_persisted_and_resumed(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(sessions, "SESSION_DIR", tmp_path)
+    client = TestClient(create_app([_solo_capable_spec()]))
+
+    with client.websocket_connect("/agents/solo/session?solo=true&start_agent=beta&session_id=s2") as ws:
+        ws.send_json({"type": "user_message", "text": "hello"})
+        first = _drain_until_turn_complete(ws)
+    assert not any(f["type"] == "session_resumed" for f in first)
+
+    # Reconnecting with the same session id must pick the stored conversation back up; a
+    # different id must not see it.
+    with client.websocket_connect("/agents/solo/session?solo=true&start_agent=beta&session_id=s2") as ws:
+        ws.send_json({"type": "user_message", "text": "again"})
+        second = _drain_until_turn_complete(ws)
+    assert any(f["type"] == "session_resumed" for f in second)
+
+    with client.websocket_connect("/agents/solo/session?solo=true&start_agent=beta&session_id=other") as ws:
+        ws.send_json({"type": "user_message", "text": "again"})
+        third = _drain_until_turn_complete(ws)
+    assert not any(f["type"] == "session_resumed" for f in third)
+
+
+def test_solo_session_requires_a_named_participant() -> None:
+    client = TestClient(create_app([_solo_capable_spec()]))
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/agents/solo/session?solo=true") as ws:
+            ws.receive_json()
+
+
+def test_solo_session_rejected_when_orchestrator_cannot_build_one() -> None:
+    client = TestClient(create_app([_two_agent_handoff_spec()]))
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/agents/demo/session?solo=true&start_agent=alpha") as ws:
+            ws.receive_json()
 
 
 def _drain_until_turn_complete(ws: Any) -> list[dict]:
