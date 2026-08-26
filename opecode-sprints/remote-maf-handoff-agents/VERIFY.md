@@ -448,11 +448,12 @@ By default nothing prompts. **Gate it with the top-level `permission` key**, not
 }
 ```
 
-A per-agent rule (`agent.<orchestratorID>.permission`) does **not** gate this path. Remote turns
-run through the V1 stream (`packages/opencode/src/session/llm/remote-stream.ts`), which executes
-the mapped tool against the V1 `SessionTools` definitions; those consult the top-level permission
-config. `RemoteToolBridge.execute` in core is the V2 runner's equivalent and is not on the HTTP
-path.
+A per-agent rule (`agent.<id>.permission`) does **not** gate this. That is not specific to remote
+agents — a local `build`-agent bash call with `agent.build.permission.bash = "ask"` also runs
+unprompted, so treat the top-level key as the one that works. Remote turns run through the V1
+stream (`packages/opencode/src/session/llm/remote-stream.ts`), which executes the mapped tool
+against the V1 `SessionTools` definitions; those consult the top-level permission config.
+`RemoteToolBridge.execute` in core is the V2 runner's equivalent and is not on the HTTP path.
 
 ### Drive it
 
