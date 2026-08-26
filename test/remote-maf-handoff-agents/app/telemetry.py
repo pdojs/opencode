@@ -1,5 +1,9 @@
 """OTel export configuration for the MAF handoff bridge, pointed at a Phoenix collector.
 
+Two independent switches govern what Phoenix receives. `PHOENIX_COLLECTOR_ENDPOINT` decides
+whether spans are exported at all; `ENABLE_SENSITIVE_DATA` (read by agent_framework itself)
+decides whether those spans carry message content. Both are set by docker-compose.yml.
+
 Configured entirely from environment variables so the same image works standalone (no
 collector, spans just aren't exported) and wired into the docker-compose dev environment
 (WS5), which sets `PHOENIX_COLLECTOR_ENDPOINT` to point at the sibling Phoenix container.
@@ -8,7 +12,10 @@ Phoenix remains a passive telemetry consumer only — nothing here calls back in
 
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _configured = False
 
@@ -47,3 +54,18 @@ def configure_telemetry() -> None:
     provider.add_span_processor(AgentFrameworkToOpenInferenceProcessor())
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
     trace.set_tracer_provider(provider)
+
+    # Message content (prompts, completions, tool arguments, tool results) is gated behind
+    # agent_framework's `enable_sensitive_data` setting, which defaults to False — with it off
+    # Phoenix renders the trace tree but every message pane is empty. The setting is read once
+    # into a module-level singleton when `agent_framework` is first imported, so it can only be
+    # turned on via the environment before startup, never from here. Warn rather than fail: a
+    # metadata-only trace is still useful, but a silently empty Phoenix is not.
+    from agent_framework.observability import OBSERVABILITY_SETTINGS
+
+    if not OBSERVABILITY_SETTINGS.SENSITIVE_DATA_ENABLED:
+        logger.warning(
+            "Exporting traces to %s without message content: set ENABLE_SENSITIVE_DATA=true "
+            "before starting the process to record prompts, completions and tool calls.",
+            endpoint,
+        )

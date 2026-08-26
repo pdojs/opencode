@@ -200,3 +200,35 @@ If you add code that reads a session's `workspaceID`, check `parseRemoteWorkspac
 (`packages/tui/src/util/remote-agent.ts`) before treating a miss as a broken workspace. The
 remaining known un-guarded caller is `dialog-session-list.tsx`'s `recover()`, which only runs
 when a session *delete* fails.
+
+## Known gap: Phoenix shows traces but empty messages
+
+If the Phoenix trace tree renders (spans, durations, token counts) but every message pane is
+blank, the cause is `ENABLE_SENSITIVE_DATA`, not the exporter.
+
+Agent Framework splits telemetry into two independent switches:
+
+| Switch | Default | Governs |
+| --- | --- | --- |
+| `PHOENIX_COLLECTOR_ENDPOINT` (read by `app/telemetry.py`) | unset | whether spans are exported at all |
+| `ENABLE_SENSITIVE_DATA` (read by `agent_framework` itself) | **false** | whether those spans carry message content |
+
+With only the first set you get the shape of the run but none of its substance:
+`ObservabilitySettings.enable_sensitive_data` defaults to `False`
+(`agent_framework/observability.py`), and every prompt, completion, tool argument and tool
+result is gated behind it. `docker-compose.yml` now sets `ENABLE_SENSITIVE_DATA=true` by
+default; `configure_telemetry()` logs a warning when it is off so the failure is visible
+instead of silent.
+
+The setting is read once into a module-level singleton at `agent_framework` import time, so it
+**must** be in the environment before the process starts — setting it from Python afterwards
+has no effect.
+
+Turn it off (`ENABLE_SENSITIVE_DATA=false`) if you ever point `PHOENIX_COLLECTOR_ENDPOINT` at a
+shared or hosted backend: it exports raw conversation content, including anything the agent
+read out of your local workspace via `run_local_command`.
+
+Verified after enabling: the OpenInference processor translates
+`gen_ai.input.messages`/`gen_ai.output.messages` into the `llm.input_messages.*` /
+`llm.output_messages.*` attributes Phoenix's UI renders, and `execute_tool run_local_command`
+spans carry both the command (`input.value` = `{"command": "cat marker.txt"}`) and its output.
