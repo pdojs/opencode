@@ -322,3 +322,73 @@ intended destination; the V1 substitution is what makes the PoC demonstrable tod
   `↪ handoff: triage → refunds`. Verified.
 - `packages/opencode/test/session/llm-remote-stream.test.ts` covers frame translation against a
   real WebSocket stub. 2 pass.
+
+## WS9 — `/participants` steering picker (Demo 3)
+
+### Goal
+
+A user driving a remote-bound session can pick any participant of the bound orchestrator and
+have the in-flight turn handed off to it, seeing the handoff render inline.
+
+### Problem
+
+WS4 deferred the `/participants` picker, so `SessionRunnerRemote.steerToAgent` had no call site
+and `VERIFY.md` recorded Demo 3 rows 11-14 as blocked.
+
+### Preliminary investigation and root cause
+
+- `steerToAgent` (`packages/core/src/session/runner/remote.ts`) was implemented and unit-tested
+  but had zero non-test callers — an orphaned export.
+- It was reachable from any entry point because `connections` is a module-level
+  `Map<SessionSchema.ID, RemoteConnection>`, not Location-scoped, so no Location plumbing was
+  needed to expose it over HTTP.
+- The sample bridge turns a `steer_to_agent` frame into *turn text* and enqueues it as a new
+  turn (`test/remote-maf-handoff-agents/app/server.py` `_frame_to_turn_text`, which returns
+  `"The user has requested you hand off to '<id>' now."`). It does **not** redirect the
+  in-flight turn.
+- That last point was the latent bug: `remote-stream.ts`'s relay settled on the first
+  `turn_complete`, so the steer-induced turn's frames were left in `RemoteConnection`'s buffer
+  and consumed by the *next* prompt's relay. Reproduced live: after a mid-turn steer, a
+  follow-up "What is 2+2?" returned the steered turn's handoff chatter instead of "4".
+
+### Definition of Done
+
+- `/participants` appears in the command palette only for remote-bound sessions.
+- Selecting a participant mid-turn produces an inline `↪ handoff: … → …` marker and the
+  picked agent's reply within the same assistant message.
+- Selecting one with no turn in flight shows a "Nothing to steer" warning and sends nothing.
+- A prompt sent after a steer is answered on its own merits (no stale-frame replay).
+
+### Resolution via WBS
+
+1. Add `POST /experimental/remote-agent/steer` to the experimental HttpApi group and handler.
+   Commit: `feat(server): add a remote-agent steer endpoint`.
+2. Regenerate the legacy JS SDK. Commit: `chore(sdk): regenerate types for the remote-agent steer endpoint`.
+3. Add `DialogParticipants` and register `/participants`, hidden unless remote-bound.
+   Commit: `feat(tui): add a /participants picker for steering remote agents`.
+4. Cover the undelivered path. Commit: `test(server): cover the undelivered remote-agent steer path`.
+5. Track turn lifecycle on `RemoteConnection` so steers are only sent mid-turn and the relay
+   absorbs each steer-induced turn. Commit: `fix(core): stop steer frames stranding an orphan remote turn`.
+
+### Specific change surface
+
+- `packages/opencode/src/server/routes/instance/httpapi/groups/remote-agent.ts` — `SteerPayload`,
+  `SteerResponse`, `RemoteAgentPaths.steer`, `steer` endpoint.
+- `packages/opencode/src/server/routes/instance/httpapi/handlers/remote-agent.ts` — `steer`
+  handler, registered via `.handle("steer", steer)`.
+- `packages/sdk/js/src/v2/gen/{sdk,types}.gen.ts` — regenerated.
+- `packages/tui/src/component/dialog-participants.tsx` — new `DialogParticipants`.
+- `packages/tui/src/app.tsx` — imports `DialogParticipants` and `parseRemoteWorkspaceID`, adds
+  the `remoteBinding` memo and the `agent.participants` command entry.
+- `packages/core/src/session/runner/remote.ts` — `RemoteConnection.beginTurn/endTurn/steer/
+  consumeSteerTurn`; `steerToAgent` delegates to `steer`.
+- `packages/opencode/src/session/llm/remote-stream.ts` — `beginTurn()` before the first frame,
+  `Effect.ensuring(endTurn)` on the relay fiber, `consumeSteerTurn()` gate on `turn_complete`.
+
+### Verified
+
+- 3 `httpapi-remote-agent` tests and 3 `llm-remote-stream` tests pass, including a steer
+  choreography test asserting one step-start/step-finish pair and a refused post-turn steer.
+- Live against the Docker bridge: idle steer → `{"delivered":false}`; mid-turn steer →
+  `{"delivered":true}` followed by `↪ handoff: triage → refunds` and the refunds agent's reply
+  inside one assistant message; a following "What is 2+2?" answered `4`.

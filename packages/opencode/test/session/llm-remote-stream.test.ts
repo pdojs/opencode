@@ -63,6 +63,36 @@ const server = Bun.serve({
 
 afterAll(() => server.stop(true));
 
+/** Second stub bridge dedicated to the steer choreography, to keep each server's script simple. */
+const steerReceived: string[] = [];
+const steerServer = Bun.serve({
+  port: 0,
+  fetch: (request, self) => (self.upgrade(request) ? undefined : new Response("expected websocket", { status: 400 })),
+  websocket: {
+    message: (socket: ServerWebSocket<unknown>, message) => {
+      const frame = JSON.parse(String(message));
+      steerReceived.push(frame.type);
+
+      // Deterministic steer choreography: the first turn is deliberately left open until the
+      // steer frame arrives, so the relay is guaranteed to still be mid-turn when it does.
+      // Mirrors the real bridge, which answers a steer with a whole extra turn rather than
+      // redirecting the current one (`test/remote-maf-handoff-agents/app/server.py`).
+      if (frame.type === "user_message") {
+        socket.send(JSON.stringify({ type: "assistant_delta", agent_id: "triage", text: "working on it" }));
+        return;
+      }
+      if (frame.type === "steer_to_agent") {
+        socket.send(JSON.stringify({ type: "turn_complete" }));
+        socket.send(JSON.stringify({ type: "handoff", source: "triage", target: frame.agent_id }));
+        socket.send(JSON.stringify({ type: "assistant_delta", agent_id: frame.agent_id, text: "refunds here" }));
+        socket.send(JSON.stringify({ type: "turn_complete" }));
+      }
+    },
+  },
+});
+
+afterAll(() => steerServer.stop(true));
+
 const bash = {
   execute: async () => ({ output: "hi", title: "echo hi", metadata: {} }),
 } as unknown as Tool;
@@ -109,5 +139,44 @@ describe("LLMRemoteStream.stream", () => {
     expect(events).toContain("tool-error");
     expect(events).toContain("tool-result");
     expect(received).toEqual(["user_message", "tool_result"]);
+  });
+
+  test("renders a steer-induced turn inside the same provider turn", async () => {
+    const sessionID = SessionSchema.ID.make("ses_remote_stream_steer");
+    const collected = Effect.runPromise(
+      LLMRemoteStream.stream({
+        sessionID,
+        target: { serverID: "stub", orchestratorID: "support" },
+        text: "hello",
+        tools: {},
+        baseURL: `http://127.0.0.1:${steerServer.port}`,
+      }).pipe(
+        Stream.runCollect,
+        Effect.map((events) => events.map((event) => event.type)),
+        Effect.ensuring(SessionRunnerRemote.closeConnection(sessionID, "test complete")),
+      ),
+    );
+
+    // The connection only exists once the stream has started, so poll until the relay has it
+    // open and has marked the turn active.
+    let steered = false;
+    for (let attempt = 0; attempt < 100 && !steered; attempt++) {
+      steered = await Effect.runPromise(SessionRunnerRemote.steerToAgent(sessionID, "refunds"));
+      if (!steered) await Bun.sleep(10);
+    }
+    expect(steered).toBe(true);
+
+    const events = await collected;
+    // The extra turn the bridge sends in response to the steer is absorbed by this relay rather
+    // than stranded for the next prompt to mis-attribute: still exactly one V1 provider turn.
+    expect(events.filter((type) => type === "step-start")).toHaveLength(1);
+    expect(events.filter((type) => type === "step-finish")).toHaveLength(1);
+    expect(steerReceived).toEqual(["user_message", "steer_to_agent"]);
+    // Pre-steer text, the handoff marker, and the steered agent's reply all landed in this turn.
+    expect(events.filter((type) => type === "text-delta").length).toBeGreaterThanOrEqual(3);
+
+    // Once the turn has settled there is nothing to steer, so the frame is refused rather than
+    // provoking an orphan turn on the bridge.
+    expect(await Effect.runPromise(SessionRunnerRemote.steerToAgent(sessionID, "billing"))).toBe(false);
   });
 });

@@ -117,22 +117,29 @@ Continue with `test-requirements.md`'s Demo 2 rows 7-10:
 
 ## 5. Run Demo 3 — targeting a specific participant
 
-**Status: rows 11 and 14 (which depend on a `/participants` steer/stop picker) cannot be run
-yet.** WS4's `wbs.md`/`design-proposal.md` explicitly recorded this as deferred: the picker
-dialog and `/participants` command were not built in the WS4 pass, in favor of shipping the
-core select→stream→observe flow first. What **can** be verified today, using WS2's
-already-implemented `steerToAgent` directly (e.g. via a temporary debug script or a follow-up
-WS4 patch that wires the picker before running this section):
+The `/participants` picker deferred in the original WS4 pass now exists, so rows 11-14 are
+runnable:
 
-- Row 12 (steer to a participant mid-turn, observe the agent complying) and row 13 (stop the
-  active participant, equivalent to the existing interrupt) are exercisable once a
-  `steerToAgent` call site exists in the TUI. Until then, this section is **blocked** on the
-  `/participants` picker follow-up noted in `wbs.md`'s WS4 status entry.
+11. With a remote-bound session, run `/participants` — the picker lists the bound
+    orchestrator's participants (`triage`, `billing`, `refunds` for the sample bridge). The
+    command is hidden for non-remote sessions, so it will not appear until you have selected a
+    remote agent with `/agents`.
+12. Send a message, then run `/participants` **while the reply is still streaming** and pick a
+    different participant. Confirm a `↪ handoff: <current> → <picked>` marker appears and the
+    picked agent replies — all inside the same assistant message.
+13. Stop the active participant with the interrupt keybinding — same path as Demo 2 row 9.
+14. Run `/participants` with no turn in flight. Confirm the "Nothing to steer" warning toast
+    appears and nothing is sent.
 
-**Action item for whoever picks this up next**: implement the deferred `/participants` dialog
-(WBS step 6 from the original WS4 plan in `design-proposal.md`), then complete rows 11-14 here.
-Do not mark Demo 3 "passed" until that dialog exists and rows 11-14 are actually run against a
-real container — this doc intentionally does not claim otherwise.
+**Why steering must be mid-turn**: the bridge answers a `steer_to_agent` frame with a whole
+extra turn rather than redirecting the in-flight one, so the frame is only sent while a relay
+is running to absorb that turn. Steering an idle connection used to strand those frames and
+replay them as the *next* prompt's answer; it is now refused outright
+(`SessionRunnerRemote.steerToAgent` returns `delivered: false`).
+
+Steering remains advisory in the MAF sense: the orchestrator may decline. Row 12 passes when
+the handoff marker and the picked agent's reply appear for a request the agent can reasonably
+comply with — not on every possible prompt.
 
 ## 6. Tear down
 

@@ -44,6 +44,8 @@ import type {
   ExperimentalRemoteAgentListResponses,
   ExperimentalRemoteAgentSelectErrors,
   ExperimentalRemoteAgentSelectResponses,
+  ExperimentalRemoteAgentSteerErrors,
+  ExperimentalRemoteAgentSteerResponses,
   ExperimentalResourceListErrors,
   ExperimentalResourceListResponses,
   ExperimentalSessionBackgroundErrors,
@@ -1041,6 +1043,49 @@ export class RemoteAgent extends HeyApiClient {
       ThrowOnError
     >({
       url: "/experimental/remote-agent/select",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Steer remote agent
+   *
+   * Ask the session's remote orchestrator to hand the active turn off to a specific participant. Advisory: reports frame delivery only.
+   */
+  public steer<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+      agentID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "agentID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalRemoteAgentSteerResponses,
+      ExperimentalRemoteAgentSteerErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent/steer",
       ...options,
       ...params,
       headers: {

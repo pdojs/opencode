@@ -47,6 +47,8 @@ import { DialogDebug } from "./component/dialog-debug"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
+import { DialogParticipants } from "./component/dialog-participants"
+import { parseRemoteWorkspaceID } from "./util/remote-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogWorkspaceList } from "./component/dialog-workspace-list"
 import { DialogConsoleOrg } from "./component/dialog-console-org"
@@ -556,6 +558,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
+  // `/participants` only makes sense for a session bound to a remote orchestrator, so it stays
+  // out of the command palette and slash-autocomplete for every other session.
+  const remoteBinding = createMemo(() => {
+    if (route.data.type !== "session") return undefined
+    const session = sync.session.get(route.data.sessionID)
+    return parseRemoteWorkspaceID(session?.workspaceID)
+  })
   const appCommands = createMemo(() =>
     [
       {
@@ -682,6 +691,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashAliases: ["agent"],
         run: () => {
           dialog.replace(() => <DialogAgent />)
+        },
+      },
+      {
+        name: "agent.participants",
+        title: "Steer remote participant",
+        category: "Agent",
+        slashName: "participants",
+        hidden: remoteBinding() === undefined,
+        run: () => {
+          dialog.replace(() => <DialogParticipants />)
         },
       },
       {
