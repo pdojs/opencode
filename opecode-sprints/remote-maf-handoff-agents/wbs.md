@@ -792,3 +792,82 @@ workspace instead.
 Requirement (C) from the investigation — close the client, log back into the remote session — is
 **not** delivered here and is not achievable by opening more TUIs. It needs bridge-side
 checkpointing keyed by `session_id`. Tracked as WS14.
+
+---
+
+## WS14 — durable remote conversations (`durable-remote-sessions`)
+
+Delivers requirement (C) from `investigation-remote-session-lifecycle.md`: close the client, come
+back later, and continue the same conversation with the same agent.
+
+### Problem
+
+A remote conversation lived only in the bridge process, in the `Workflow` object held by the open
+WebSocket. Closing the socket destroyed it. Since every TUI spawns its own server worker, quitting
+the TUI closed every bridge socket — so a remote session could never be rejoined, only restarted.
+
+### Resolution
+
+MAF workflows already checkpoint at exactly the moment we care about: the runner writes a
+checkpoint when the workflow goes idle awaiting user input, and a restored checkpoint keeps the
+same pending request id, so a restore can be answered as if the original request were still open.
+
+Checkpoints are selected only by workflow *name*, so `app/checkpoints.py` names each workflow
+`<orchestrator_id>::<session_id>`. An experiment confirmed a workflow's name does not feed its
+`graph_signature_hash`, so per-session naming does not break the topology validation a restore
+performs.
+
+On connect the bridge looks for the newest checkpoint for that name that is parked awaiting user
+input. If it finds one it emits a `session_resumed` frame and delivers the turn as the response to
+the request the workflow was already waiting on; otherwise the session starts fresh.
+
+### Verified
+
+- Same `session_id`, socket closed between turns: the agent recalled `INV-8823`. Before WS14 the
+  same probe returned *"I don't have access to previous conversations."*
+- Repeated across a `docker restart`: still recalled, from the `bridge-checkpoints` volume.
+- An unrecognised `session_id` sent no `session_resumed` frame and had no memory — sessions do not
+  leak into each other.
+- End-to-end through `opencode serve`: `select` → state `INV-9911` → `release` → `select` → the
+  agent recalled it. This is the exact probe that returned *"I can't recall previous messages"* in
+  WS13.
+- 9 bridge tests pass; core and tui typecheck.
+
+### Deviation
+
+Checkpoint payloads are pickled and gated by an allowlist. The framework auto-allows the
+`agent_framework.` module prefix, but the orchestrations package is `agent_framework_orchestrations.`
+and falls outside it, so `HandoffAgentUserRequest` (and the `GenericAlias` in its annotation) must
+be named explicitly or every checkpoint written is unreadable on load. The list was derived by
+decoding real checkpoints rather than guessed; it widens what unpickling may instantiate, so it is
+kept minimal.
+
+No `resumable` manifest field was added as originally designed: it would have duplicated
+`multi_turn`, since only multi-turn patterns leave a conversation parked awaiting input.
+
+## WS15 — rejoinable session UX (`durable-remote-sessions`)
+
+### Problem
+
+WS14 made a remote conversation survivable, but nothing surfaced it: picking an agent always
+created a brand-new session, and there was no way to see which conversations an agent already held.
+
+### Resolution
+
+- A sidebar panel lists the other sessions bound to the same remote agent, current one marked,
+  each selectable. This is the "tab to the right" for picking a session.
+- Picking a remote agent with no session open now offers that agent's existing conversations to
+  rejoin, with "New session" first, instead of silently starting over.
+
+Both filter on the `remote:<server>:<orchestrator>` sentinel already stored in `session.workspaceID`,
+which OpenCode persists — so no new storage was needed for the OpenCode half. Participant is
+deliberately ignored when grouping: addressing a different agent inside one orchestrator is still
+the same conversation.
+
+### Known limitation
+
+Explicitly switching back to a native agent calls `release`, which clears `workspaceID` — so that
+session stops being listed under the agent. The conversation is not lost: navigating to the session
+and selecting the agent again still resumes it from its checkpoint (verified above). Only its
+listing is affected. The detach/rejoin path the requirement asks for does not call `release` and is
+unaffected.
