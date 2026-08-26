@@ -2540,6 +2540,21 @@ export type ProviderAuthError1 = {
   }
 }
 
+export type RemoteAgentServerEntry = {
+  id: string
+  url: string
+  disabled: boolean
+  manifest?: RemoteProtocolManifest
+  error?: string
+}
+
+export type RemoteAgentServerNotFoundError = {
+  name: "RemoteAgentServerNotFoundError"
+  data: {
+    message: string
+  }
+}
+
 export type NotFoundError = {
   name: "NotFoundError"
   data: {
@@ -3852,6 +3867,22 @@ export type ProjectDirectories = Array<{
 export type PtyTicketConnectToken = {
   ticket: string
   expires_in: number
+}
+
+export type RemoteProtocolParticipant = {
+  id: string
+  name: string
+}
+
+export type RemoteProtocolOrchestratorManifestEntry = {
+  id: string
+  name: string
+  description: string
+  participants: Array<RemoteProtocolParticipant>
+}
+
+export type RemoteProtocolManifest = {
+  orchestrators: Array<RemoteProtocolOrchestratorManifestEntry>
 }
 
 export type WorkspaceEventConnectionStatus = {
@@ -9435,6 +9466,73 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type ExperimentalRemoteAgentListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent"
+}
+
+export type ExperimentalRemoteAgentListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalRemoteAgentListError =
+  ExperimentalRemoteAgentListErrors[keyof ExperimentalRemoteAgentListErrors]
+
+export type ExperimentalRemoteAgentListResponses = {
+  /**
+   * Configured remote agent servers with live manifests
+   */
+  200: Array<RemoteAgentServerEntry>
+}
+
+export type ExperimentalRemoteAgentListResponse =
+  ExperimentalRemoteAgentListResponses[keyof ExperimentalRemoteAgentListResponses]
+
+export type ExperimentalRemoteAgentSelectData = {
+  body?: {
+    sessionID: string
+    serverID: string
+    orchestratorID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent/select"
+}
+
+export type ExperimentalRemoteAgentSelectErrors = {
+  /**
+   * RemoteAgentServerNotFoundError | BadRequest | InvalidRequestError
+   */
+  400: RemoteAgentServerNotFoundError | EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalRemoteAgentSelectError =
+  ExperimentalRemoteAgentSelectErrors[keyof ExperimentalRemoteAgentSelectErrors]
+
+export type ExperimentalRemoteAgentSelectResponses = {
+  /**
+   * Session bound to remote agent
+   */
+  200: {
+    sessionID: string
+    workspaceID: string
+  }
+}
+
+export type ExperimentalRemoteAgentSelectResponse =
+  ExperimentalRemoteAgentSelectResponses[keyof ExperimentalRemoteAgentSelectResponses]
 
 export type SessionListData = {
   body?: never

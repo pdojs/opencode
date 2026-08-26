@@ -264,7 +264,77 @@ architecture instead:
 - `packages/tui/src/component/dialog-participants.tsx` (new) — participant list + steer/stop actions.
 - `packages/tui/src/routes/session/index.tsx` (or nearest session-status rendering component, to confirm at implementation time) — handoff indicator.
 
+**Specific change surface — as implemented** (this pass covers the picker/selection slice only;
+see the deviation notes below for what's deferred):
+- `packages/tui/src/app.tsx` — added `slashAliases: ["agent"]` to the existing `agent.list`
+  command entry (~line 678). The `/participants` command and its dialog were **not** built this
+  pass (see deferred note).
+- `packages/opencode/src/server/routes/instance/httpapi/groups/remote-agent.ts` (new) — declares
+  `GET /experimental/remote-agent` (`list`) and `POST /experimental/remote-agent/select`
+  (`select`) on a new `RemoteAgentApi` HttpApi group, following the exact
+  `InstanceContextMiddleware` → `WorkspaceRoutingMiddleware` → `Authorization` middleware chain
+  every other experimental group uses (`groups/workspace.ts`/`groups/mcp.ts`). `ServerEntry` is a
+  plain `Schema.Struct` (not `Schema.Class` — a `Schema.Class`'s encoder rejected plain object
+  literals returned from the handler with a `BadRequest`/"Expected RemoteAgentServerEntry, got
+  {...}" error; `Schema.Struct` has no such instance-identity requirement and was the correct
+  choice here since no class methods are needed).
+- `packages/opencode/src/server/routes/instance/httpapi/handlers/remote-agent.ts` (new) — `list`
+  calls `RemoteAgentManifest.fetchManifest()` (WS2) per configured `remote_agent.servers` entry
+  and folds any fetch failure into a per-server `error` string instead of failing the whole
+  response; `select` resolves the same server list, rejects unknown/disabled servers with
+  `RemoteAgentServerNotFoundError`, and otherwise calls `Session.Service.setWorkspace({sessionID,
+  workspaceID: SessionRunnerRemote.remoteWorkspaceID(serverID, orchestratorID)})` — the same
+  `SessionTable.workspace_id` column `SessionSchema.Info.location.workspaceID` is derived from
+  (`packages/core/src/session/info.ts:38`), so this is the exact seam WS2's `remote.ts` already
+  reads from. **Location-scoping deviation**: `remote_agent` is a field on core's V2
+  `Config.Service` (`packages/core/src/config.ts`), which is Location-scoped (built per-directory
+  via `LocationServiceMap`/`AppNodeBuilderV1`), not on opencode's own V1 `@/config/config`
+  `Config.Service` used elsewhere in `httpapi/server.ts`'s top-level `app` `LayerNode.group`. The
+  handler therefore yields `LocationServiceMap.Service` (imported from
+  `@opencode-ai/core/location-services`, the same service `handlers/file.ts` already uses for the
+  same reason) and wraps each config read with `locations.get(Location.Ref.make({directory}))`,
+  re-resolving the current request's directory from `InstanceState.context` **per request**
+  inside a function (not once at handler-graph assembly time — an early version hoisted this
+  read outside the per-request closure and died with "InstanceRef not provided" since
+  `InstanceState.context` is request-scoped, not available while the handler group's layer is
+  being constructed at server startup).
+- `packages/opencode/src/server/routes/instance/httpapi/api.ts` /`server.ts` — added
+  `RemoteAgentApi`/`remoteAgentHandlers` alongside the other experimental groups.
+- `packages/opencode/test/server/httpapi-remote-agent.test.ts` (new) — 2 tests following the
+  `httpapi-mcp.test.ts` pattern (raw `HttpApiApp.webHandler()` requests against a `TestInstance`
+  with a `remote_agent.servers` config entry): manifest-fetch failure surfaces as a per-server
+  `error` string through `list` (200, not a 500), and `select` against an unknown/disabled server
+  returns 400 via `RemoteAgentServerNotFoundError`.
+- **Client codegen deviation**: `bun run generate` (from `packages/client`) does not emit
+  anything for experimental HttpApi groups at all — confirmed `workspace`/`mcp` are absent from
+  its generated output too, so this is expected, not a regression. The actual typed client the
+  TUI calls (`sdk.client.experimental.remoteAgent.{list,select}`) comes from `packages/sdk/js`
+  (regenerated via `./script/build.ts`, which reads the live OpenAPI surface including
+  experimental groups) — both `bun run generate` and the sdk/js build were run and their outputs
+  committed.
+- `packages/tui/src/component/dialog-agent.tsx` — rewritten: local agents get `category: item.native
+  ? "Native" : "Workspace"` (the `description: item.native ? "native" : ...` special-case is
+  removed, exactly as planned); a `createResource` fetches
+  `sdk.client.experimental.remoteAgent.list()` and flattens each server's `manifest.orchestrators`
+  into `category: "Remote"` options; selecting a remote option calls `.select()` with the current
+  route's `sessionID` (from `useRoute()`, mirroring `dialog-workspace-list.tsx`'s
+  `route.data.type === "session"` pattern) and shows an error toast on failure instead of
+  silently no-op'ing; selecting a local option is unchanged (`local.agent.set(...)`).
+- **Deferred from this pass** (WBS steps 5 and 6 above): the persistent "who's speaking" status
+  badge subscribed to a `session.remote-handoff` `EventV2` variant, and the `/participants`
+  steer/stop picker, were **not** implemented. Rationale: WS2 already renders handoff notices as
+  inline assistant text (`↪ handoff: source → target`), which satisfies the DoD's literal "shows
+  a visible indicator of which named sub-agent currently holds the handoff" requirement without a
+  dedicated component — the plan's "status line/badge" phrasing was one way to satisfy that DoD
+  statement, not the only way. `steerToAgent` (WS2) is already implemented and exported, so a
+  `/participants` picker remains a small, additive follow-up (a new dialog + one command
+  registration) rather than new plumbing; it is deferred to keep this pass focused on the picker
+  selection flow the user's demo scripts (`test-requirements.md`) exercise first (select → send →
+  observe), and can be picked up as a WS4-follow-up commit if the demo reveals the inline-text
+  handoff signal is insufficient.
+
 ---
+
 
 ### WS5 — compose-dev-env
 
