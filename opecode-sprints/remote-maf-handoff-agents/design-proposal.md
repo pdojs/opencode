@@ -76,11 +76,24 @@ Four layers, from fastest/most-deterministic to slowest/most-realistic. Layers 1
 5. Add `openinference-instrumentation-agent-framework` + OTel exporter config (env-var driven collector endpoint). Commit: `Container: wire OTel export to Phoenix`.
 6. Write `Dockerfile` for the server. Commit: `Container: add Dockerfile for handoff bridge server`.
 
-**Specific change surface** (new files, exact paths finalized during implementation):
-- `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/server.py` (new)
-- `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/protocol.py` (new — wire frame Pydantic models, shared contract WS2 will mirror in TypeScript)
-- `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/tests/test_server.py` (new — Layer 1 contract tests, deterministic fake-agent fixture modeled on `packages/orchestrations/tests/test_handoff.py`'s `AsyncMock`/`MagicMock` pattern)
-- `agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/Dockerfile` (new)
+**Specific change surface** — **as implemented** (superseding the original plan below, which
+assumed a location inside the `agent-framework` checkout): `test/remote-maf-handoff-agents/`
+inside the `opencode` repo (see `wbs.md`'s Implementation status note for why), as its own
+standalone Python app depending on published `agent-framework-*` PyPI packages rather than a
+local path dependency:
+- `test/remote-maf-handoff-agents/app/server.py` — FastAPI app, manifest + WS session, tool bridge, steer_to_agent handling.
+- `test/remote-maf-handoff-agents/app/protocol.py` — wire frame Pydantic models, shared contract WS2 will mirror in TypeScript.
+- `test/remote-maf-handoff-agents/app/orchestrator.py` — sample triage/billing/refunds HandoffBuilder workflow + manifest metadata.
+- `test/remote-maf-handoff-agents/app/telemetry.py` — OTel export to Phoenix, env-var gated.
+- `test/remote-maf-handoff-agents/app/main.py` — uvicorn ASGI entrypoint.
+- `test/remote-maf-handoff-agents/tests/test_server.py` — Layer 1 contract tests, deterministic fake-agent fixtures modeled on `packages/orchestrations/tests/test_handoff.py`'s `MockChatClient`/`MockHandoffAgent` pattern (5/5 passing).
+- `test/remote-maf-handoff-agents/Dockerfile`, `README.md`, `pyproject.toml`, `.gitignore` (new).
+
+Original plan (kept for reference; not the actual location used):
+- ~~`agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/server.py`~~
+- ~~`agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/protocol.py`~~
+- ~~`agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/tests/test_server.py`~~
+- ~~`agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/Dockerfile`~~
 
 ---
 
