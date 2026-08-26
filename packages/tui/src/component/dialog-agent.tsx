@@ -8,6 +8,7 @@ import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 import { errorMessage } from "../util/error"
 import { parseRemoteWorkspaceID } from "../util/remote-agent"
+import { DialogRemoteSession } from "./dialog-remote-session"
 
 type AgentOption =
   | { type: "local"; name: string }
@@ -133,23 +134,21 @@ export function DialogAgent() {
         }
 
         // Remote agents bind to a Session (their handoff state lives server-side, keyed by
-        // sessionID), but the user should be able to pick one before ever sending a message —
-        // transparently create an empty session here instead of requiring one to pre-exist.
-        let sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+        // sessionID), but the user should be able to pick one before ever sending a message — so
+        // with no session open, offer this agent's existing conversations to rejoin before
+        // falling back to creating an empty one.
+        const remote = option.value
+        const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
         if (!sessionID) {
-          const created = await sdk.client.session
-            .create({ directory: sdk.directory })
-            .catch((err) => ({ data: undefined, error: err }))
-          if (!created.data) {
-            toast.show({
-              variant: "error",
-              title: "Failed to start session",
-              message: errorMessage(created.error),
-            })
-            return
-          }
-          sessionID = created.data.id
-          route.navigate({ type: "session", sessionID })
+          dialog.replace(() => (
+            <DialogRemoteSession
+              serverID={remote.serverID}
+              orchestratorID={remote.orchestratorID}
+              participantID={remote.participantID}
+              name={option.title}
+            />
+          ))
+          return
         }
 
         const result = await sdk.client.experimental.remoteAgent
