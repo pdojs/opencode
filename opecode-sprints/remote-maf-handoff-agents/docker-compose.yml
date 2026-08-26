@@ -55,6 +55,11 @@ services:
       #
       # Never enable it against a shared or hosted backend.
       - ENABLE_SENSITIVE_DATA=${ENABLE_SENSITIVE_DATA:-false}
+      - MAF_CHECKPOINT_DIR=/data/checkpoints
+    volumes:
+      # Conversation checkpoints, so rejoining a session works across a container restart and
+      # not just across a reconnect.
+      - bridge-checkpoints:/data/checkpoints
     depends_on:
       - phoenix
     healthcheck:
@@ -68,3 +73,6 @@ services:
     ports:
       - "6006:6006" # Phoenix UI + HTTP OTLP
       - "4317:4317" # OTLP gRPC collector (used by the bridge's telemetry.py)
+
+volumes:
+  bridge-checkpoints:
