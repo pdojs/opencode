@@ -185,5 +185,22 @@ Deviations from the original plan, made explicitly when implementation started:
   (not deleted); `feature/remote-maf-handoff-agents`'s history is one clean, already-tested
   commit per workstream (WS1-WS4 + the doc addendum = 5 commits total so far). `feature/... ` is
   **not yet merged into `dev`** — that happens once WS5 lands, as one final epic-level PR.
-- **Next**: WS5 (`compose-dev-env`) — docker-compose for the bridge container + Phoenix, and the
-  manual end-to-end verification doc.
+- **WS5 status**: implemented on `story/compose-dev-env` (PR #8, squash-merged into
+  `feature/remote-maf-handoff-agents`). Adds `opecode-sprints/remote-maf-handoff-agents/docker-compose.yml`
+  (bridge service builds WS1's Dockerfile, requires `OPENAI_API_KEY`, points
+  `PHOENIX_COLLECTOR_ENDPOINT` at a `phoenix` service using the official `arizephoenix/phoenix:latest`
+  image on `:6006`/`:4317`, no Postgres needed for this PoC) and `VERIFY.md` (the Layer 4 manual
+  demo script, adapting `test-requirements.md`'s Demo 1/2/3 tables into concrete steps against a
+  real local OpenCode build + workspace directory). **Verification limits disclosed in
+  VERIFY.md itself** rather than glossed over: (1) `docker-compose config` validated the compose
+  file's schema/references successfully, but `docker compose up --build` was not run end-to-end
+  in this environment (no live Docker daemon available — same gap already disclosed for WS1's
+  `docker build`); (2) Demo 3 rows 11/14 (participant steer/stop via `/participants`) remain
+  blocked on WS4's deferred participant picker and are explicitly called out as not-yet-runnable
+  rather than marked passed.
+- **All planned workstreams (WS1-WS5) are now implemented and merged into
+  `feature/remote-maf-handoff-agents`.** Remaining before this epic can merge to `dev`: (a) a
+  live-daemon run of WS5's `docker compose up --build` plus Demos 1-2 from `VERIFY.md`
+  end-to-end; (b) the deferred `/participants` picker (WS4 follow-up) to unblock Demo 3 rows
+  11/14; (c) a final `feature/remote-maf-handoff-agents` -> `dev` PR once (a)/(b) are done or
+  explicitly accepted as follow-up work.
