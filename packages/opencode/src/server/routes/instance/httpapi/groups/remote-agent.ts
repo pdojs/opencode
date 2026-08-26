@@ -30,6 +30,21 @@ export const SelectResponse = Schema.Struct({
   workspaceID: WorkspaceV2.ID,
 })
 
+export const SteerPayload = Schema.Struct({
+  sessionID: SessionID,
+  agentID: Schema.String,
+})
+
+export const SteerResponse = Schema.Struct({
+  /**
+   * False when the Session has no open remote connection yet — i.e. it was bound to an
+   * orchestrator but hasn't sent a first turn, or the last turn was interrupted. Steering is
+   * advisory (see `SessionRunnerRemote.steerToAgent`), so this only reports frame delivery,
+   * never whether the orchestrator actually handed off.
+   */
+  delivered: Schema.Boolean,
+})
+
 export class RemoteAgentServerNotFoundError extends Schema.ErrorClass<RemoteAgentServerNotFoundError>(
   "RemoteAgentServerNotFoundError",
 )(
@@ -43,6 +58,7 @@ export class RemoteAgentServerNotFoundError extends Schema.ErrorClass<RemoteAgen
 export const RemoteAgentPaths = {
   list: root,
   select: `${root}/select`,
+  steer: `${root}/steer`,
 } as const
 
 export const RemoteAgentApi = HttpApi.make("remote-agent")
@@ -70,6 +86,19 @@ export const RemoteAgentApi = HttpApi.make("remote-agent")
             identifier: "experimental.remoteAgent.select",
             summary: "Select remote agent",
             description: "Bind a session's Location to the selected remote orchestrator so its next turn runs there.",
+          }),
+        ),
+        HttpApiEndpoint.post("steer", RemoteAgentPaths.steer, {
+          query: WorkspaceRoutingQuery,
+          payload: SteerPayload,
+          success: described(SteerResponse, "Steer frame delivery result"),
+          error: [HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.remoteAgent.steer",
+            summary: "Steer remote agent",
+            description:
+              "Ask the session's remote orchestrator to hand the active turn off to a specific participant. Advisory: reports frame delivery only.",
           }),
         ),
       )

@@ -10,7 +10,7 @@ import { Session } from "@/session/session"
 import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { RemoteAgentServerNotFoundError, SelectPayload } from "../groups/remote-agent"
+import { RemoteAgentServerNotFoundError, SelectPayload, SteerPayload } from "../groups/remote-agent"
 
 export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote-agent", (handlers) =>
   Effect.gen(function* () {
@@ -65,6 +65,14 @@ export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote
       return { sessionID: ctx.payload.sessionID, workspaceID }
     })
 
-    return handlers.handle("list", list).handle("select", select)
+    // `steerToAgent` reads SessionRunnerRemote's module-level connection map rather than a
+    // Location-scoped service, so it needs no Location provision here — a Session's open remote
+    // socket is reachable from any entry point, including the V1 prompt path that owns it.
+    const steer = Effect.fn("RemoteAgentHttpApi.steer")(function* (ctx: { payload: typeof SteerPayload.Type }) {
+      const delivered = yield* SessionRunnerRemote.steerToAgent(ctx.payload.sessionID, ctx.payload.agentID)
+      return { delivered }
+    })
+
+    return handlers.handle("list", list).handle("select", select).handle("steer", steer)
   }),
 ).pipe(Layer.provide(locationServiceMapLayer))
