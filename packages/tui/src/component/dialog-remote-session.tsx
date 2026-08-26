@@ -18,6 +18,7 @@ export function DialogRemoteSession(props: {
   serverID: string
   orchestratorID: string
   participantID?: string
+  solo?: boolean
   name: string
 }) {
   const sdk = useSDK()
@@ -31,7 +32,11 @@ export function DialogRemoteSession(props: {
       .list()
       .filter((session) => {
         const remote = parseRemoteWorkspaceID(session.workspaceID)
-        return remote?.serverID === props.serverID && remote?.orchestratorID === props.orchestratorID
+        if (remote?.serverID !== props.serverID || remote.orchestratorID !== props.orchestratorID) return false
+        // A private conversation with one agent and the shared network conversation are separate
+        // transcripts, so they must not be offered as if they were interchangeable.
+        if (remote.solo !== (props.solo ?? false)) return false
+        return !remote.solo || remote.participantID === props.participantID
       })
       .toSorted((a, b) => b.time.updated - a.time.updated)
       .map((session) => ({
@@ -71,6 +76,7 @@ export function DialogRemoteSession(props: {
             serverID: props.serverID,
             orchestratorID: props.orchestratorID,
             participantID: props.participantID,
+            solo: props.solo,
           })
           .catch((err) => ({ data: undefined, error: err }))
 
