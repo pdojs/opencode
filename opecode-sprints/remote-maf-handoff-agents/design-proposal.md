@@ -187,6 +187,46 @@ Implementation status note for the full rationale):
 - `packages/core/src/session/execution/remote.ts` (from WS2) — wire in the bridge on `tool_call` frame receipt.
 - `packages/opencode/src/tool/registry.ts` — expose a lookup function usable by the bridge to resolve a `Tool.Def` by name outside the normal per-agent assembly path (small addition, not a rewrite).
 
+**Specific change surface** — **as implemented** (superseding the plan above; see `wbs.md`'s
+Implementation status note for the full rationale): the codebase's canonical tool
+architecture had, by the time WS3 was implemented, already moved to a newer,
+`packages/core/src/tool/*`-owned representation (`Tool.make`, `Tools.Service`,
+`ToolRegistry.Service.materialize(permissions).settle(...)`) that supersedes the
+`packages/opencode/src/tool/registry.ts` `Tool.Def`/`ExecuteResult` shape the original plan
+cited — that older shape no longer exists in this form. WS3 was built against the current
+architecture instead:
+- `packages/core/src/session/runner/remote-tool-bridge.ts` (new, **not**
+  `execution/remote-tool-bridge.ts` — same package-placement reasoning as WS2's runner; there is
+  still no second execution-layer file). Exports a `NAME_MAP` (currently `run_local_command` →
+  `bash`, matching WS1's `test/remote-maf-handoff-agents/app/orchestrator.py`'s
+  `run_local_command_tool`), an `execute()` function that resolves the mapped local tool name,
+  translates the remote tool's `arguments` record into that tool's input shape, and calls
+  `ToolRegistry.Service.materialize().settle(...)` — the exact same registry, permission gating
+  (`PermissionV2.Service`, captured inside each built-in tool's own layer at construction, per
+  `packages/core/src/tool/AGENTS.md`), and settlement path a local agent's own tool calls go
+  through, and a `resultText()` helper rendering a settled `ToolResultValue` into the plain-text
+  `output` field WS1's `tool_result` frame expects.
+- `packages/core/src/session/runner/remote.ts` — wired `ToolRegistry.Service` into the runner's
+  layer (added to `SessionRunnerRemote.node`'s `deps`, alongside the existing
+  `BuiltInTools.node`/`ToolRegistry.toolsNode` already shared by every Location per
+  `location-services.ts` — no new wiring was needed there since WS2 already scoped the runner
+  replacement to *only* swap `SessionRunnerLLM.node`, leaving tools/permissions identical between
+  local and remote Locations). `runTurn`'s `tool_call` case now publishes a synthetic
+  `LLMEvent.toolCall`/`LLMEvent.toolResult` pair through the same `createLLMEventPublisher` used
+  for text — this means the TUI's existing tool-call rendering (permission prompts, tool-result
+  cards) requires zero changes to display a remote tool call, the same "zero rendering changes"
+  win WS2 established for text.
+- No changes were needed to any `packages/opencode/src/tool/*` file — the current
+  `ToolRegistry.Service` already exposes exactly the `materialize()`/`settle()` lookup surface
+  the bridge needs; there was no separate lookup function to add.
+- `packages/core/test/remote-tool-bridge.test.ts` (new) — unit tests against a fake
+  `ToolRegistry.Interface` (not a live registry or WS server): asserts an unmapped tool name is
+  rejected without calling the registry, `run_local_command` is correctly mapped/translated to
+  `bash`'s input shape, and `resultText()` renders both string and non-string result values.
+  **Deferred, same as WS2**: no end-to-end test exercises a real `bash` execution or a real
+  permission prompt through a live WS connection — that gap remains open for WS5's compose-based
+  demo or a dedicated follow-up integration test.
+
 ---
 
 ### WS4 — agent-picker-ui
@@ -254,5 +294,6 @@ Implementation status note for the full rationale):
 - Multi-remote-agent concurrent sessions (talking to two containers from one OpenCode session) — deferred; PoC is one remote backend per Session.
 - Automatic keeping WS1's `protocol.py` and WS2's `remote-protocol.ts` in sync (e.g. codegen) — deferred; PoC accepts manual drift risk, flagged in WS2.
 - Persisting remote-turn transcripts identically to local ones for replay/resume across OpenCode restarts — deferred; PoC assumes a remote session lives only as long as the WS connection.
+- **A2A-protocol alignment** (raised by user during WS3 review, citing Azure API Center's agent-registration model — https://learn.microsoft.com/en-us/azure/api-center/register-manage-agents — and https://a2a-protocol.org): our bespoke manifest+WS protocol is already conceptually equivalent to A2A's shape (agent-card discovery + streaming interaction over one channel, with OpenCode's `Location` routing already acting as the "agent host router"), so no architectural rework is implied. Replacing the wire format itself — the `GET /agents/manifest` JSON shape and the WS frame protocol (`protocol.py`/`remote-protocol.ts`) — with an A2A-compliant agent card (`/.well-known/agent.json`) and JSON-RPC/SSE `message/stream` transport is deferred as a distinct, orthogonal follow-up: it would let any A2A-compatible agent (not just our sample MAF container) plug into the same `RemoteLocationRunner`/tool-bridge machinery, and would let the container register cleanly in a registry like Azure API Center. Decision: keep the current bespoke protocol for this PoC (WS1-WS3 already implemented and tested against it); revisit as a future WS6 if/when interop with non-MAF or externally-registered agents becomes a real requirement.
 
 See `requirements.md` for Goal/Problem/DoD and `wbs.md` for dependency graph, branch names, and implementation order.
