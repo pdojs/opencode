@@ -46,6 +46,7 @@ import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Type
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
+import { SessionRunnerRemote } from "@opencode-ai/core/session/runner/remote"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
@@ -1183,18 +1184,24 @@ const layer = Layer.effect(
             Effect.provideService(Session.Service, sessions),
           )
 
+          // A remote-bound Session never calls the resolved local model; its turn is serviced by
+          // the orchestrator named in the Location sentinel, so label the message with that instead.
+          const remote = SessionRunnerRemote.isRemoteWorkspaceID(session.workspaceID)
+            ? SessionRunnerRemote.parseRemoteWorkspaceID(session.workspaceID)
+            : undefined
+
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
             parentID: lastUser.id,
             role: "assistant",
-            mode: agent.name,
-            agent: agent.name,
+            mode: remote?.orchestratorID ?? agent.name,
+            agent: remote?.orchestratorID ?? agent.name,
             variant: lastUser.model.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            modelID: model.id,
-            providerID: model.providerID,
+            modelID: remote ? ModelV2.ID.make(remote.orchestratorID) : model.id,
+            providerID: remote ? ProviderV2.ID.make("remote-agent") : model.providerID,
             time: { created: Date.now() },
             sessionID,
           }
@@ -1282,6 +1289,7 @@ const layer = Layer.effect(
               ],
               tools,
               model,
+              remote,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
