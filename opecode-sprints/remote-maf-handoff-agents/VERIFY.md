@@ -116,21 +116,23 @@ docker compose -f opecode-sprints/remote-maf-handoff-agents/docker-compose.yml d
 
 `opecode-sprints/remote-maf-handoff-agents/docker-compose.yml` was validated with
 `docker-compose -f ... config` (confirms YAML/schema correctness, resolves the `bridge` build
-context and `phoenix` image references, confirms env var interpolation) — this succeeded. The
-full `docker compose up --build` run in step 1 above was **not** exercised end-to-end in the
-environment this doc was authored in (no running Docker daemon available — same limitation
-noted in WS1's `test/remote-maf-handoff-agents/README.md` for `docker build`). Re-run step 1
-against a live daemon and correct anything that fails there before treating Demos 1-2 as
-verified.
+context and `phoenix` image references, confirms env var interpolation). **`docker-compose up
+--build` (note: this environment provides the standalone `docker-compose` v1 CLI, not the
+`docker compose` v2 plugin) has since been run end-to-end against a live daemon and a real
+OpenAI key**, which surfaced and led to fixing 4 real runtime bugs not caught by any prior
+code-only review (see `wbs.md`'s "Dogfooding Demo 1" entry for full detail: 2 bridge-container
+bugs fixed in PR #10, 2 more — including a `WorkspaceV2.ID` schema bug that made
+`/experimental/remote-agent/select` completely non-functional — fixed in PR #11). Demo 1 rows
+1-6 were confirmed via a scripted API walkthrough (session create -> remote-agent select ->
+prompt -> observe a real `triage -> billing` handoff relayed into the session's messages);
+Demo 2/3's TUI-specific rows (actual `/agent` keystrokes, visual picker, steer-while-streaming)
+still require a human driving the real TUI — the underlying API/runtime path they depend on is
+now confirmed unblocked.
 
 ## Known gaps / follow-ups surfaced while writing this doc
 
 - **`/participants` steer/stop picker** (blocks Demo 3 rows 11-14, see §5) — deferred from WS4,
   tracked in `wbs.md`.
-- **`docker build` for the bridge image was not exercised against a live daemon during WS1**
-  (per `test/remote-maf-handoff-agents/README.md`'s note) — the first real run of step 1 above
-  is also the first real verification of that Dockerfile; if it fails, fix the Dockerfile before
-  treating any other row in this doc as reliable.
 - **No automated CI runs this doc** — by design (Layer 4 is manual-only per the Testing
   Strategy), but that also means regressions here are only caught by a human re-running these
   steps; re-run this doc after any change touching WS1-WS4 before relying on a demo.
