@@ -1020,6 +1020,7 @@ export class RemoteAgent extends HeyApiClient {
       sessionID?: string
       serverID?: string
       orchestratorID?: string
+      participantID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1033,6 +1034,7 @@ export class RemoteAgent extends HeyApiClient {
             { in: "body", key: "sessionID" },
             { in: "body", key: "serverID" },
             { in: "body", key: "orchestratorID" },
+            { in: "body", key: "participantID" },
           ],
         },
       ],

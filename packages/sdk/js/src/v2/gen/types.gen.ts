@@ -9520,6 +9520,7 @@ export type ExperimentalRemoteAgentSelectData = {
     sessionID: string
     serverID: string
     orchestratorID: string
+    participantID?: string
   }
   path?: never
   query?: {
