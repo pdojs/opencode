@@ -171,3 +171,23 @@ now confirmed unblocked.
 - **No automated CI runs this doc** — by design (Layer 4 is manual-only per the Testing
   Strategy), but that also means regressions here are only caught by a human re-running these
   steps; re-run this doc after any change touching WS1-WS4 before relying on a demo.
+
+## Known gap: remote sentinels vs. the workspace registry
+
+A remote binding is stored as a `remote:<serverID>:<orchestratorID>` sentinel in the session's
+`workspaceID`, and PR #15 deliberately keeps that sentinel **out** of the workspace registry.
+Any TUI code that resolves `workspaceID` through `project.workspace.*` therefore sees a
+dangling workspace unless it checks `parseRemoteWorkspaceID` first.
+
+This bit once already: the submit path gated on
+`project.workspace.status(workspaceID) ?? "error"`, so sending the first message to a
+remote-bound session opened the **"Workspace Unavailable"** dialog. Choosing *Restore → None
+(use the local project)* then warped the session to `workspaceID: null`, silently discarding
+the remote binding — the status bar reverted to the local agent and the next prompt ran
+locally, making the remote selection appear impossible to persist. Fixed by skipping the gate
+for sentinels.
+
+If you add code that reads a session's `workspaceID`, check `parseRemoteWorkspaceID`
+(`packages/tui/src/util/remote-agent.ts`) before treating a miss as a broken workspace. The
+remaining known un-guarded caller is `dialog-session-list.tsx`'s `recover()`, which only runs
+when a session *delete* fails.
