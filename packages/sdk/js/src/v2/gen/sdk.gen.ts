@@ -40,6 +40,10 @@ import type {
   ExperimentalControlPlaneMoveSessionResponses,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
+  ExperimentalRemoteAgentListErrors,
+  ExperimentalRemoteAgentListResponses,
+  ExperimentalRemoteAgentSelectErrors,
+  ExperimentalRemoteAgentSelectResponses,
   ExperimentalResourceListErrors,
   ExperimentalResourceListResponses,
   ExperimentalSessionBackgroundErrors,
@@ -967,6 +971,87 @@ export class ProjectCopy extends HeyApiClient {
   }
 }
 
+export class RemoteAgent extends HeyApiClient {
+  /**
+   * List remote agent servers
+   *
+   * List configured remote MAF agent bridge servers, each with its live-fetched agents manifest.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalRemoteAgentListResponses,
+      ExperimentalRemoteAgentListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Select remote agent
+   *
+   * Bind a session's Location to the selected remote orchestrator so its next turn runs there.
+   */
+  public select<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+      serverID?: string
+      orchestratorID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "serverID" },
+            { in: "body", key: "orchestratorID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalRemoteAgentSelectResponses,
+      ExperimentalRemoteAgentSelectErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent/select",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Adapter extends HeyApiClient {
   /**
    * List workspace adapters
@@ -1269,6 +1354,11 @@ export class Experimental extends HeyApiClient {
   private _projectCopy?: ProjectCopy
   get projectCopy(): ProjectCopy {
     return (this._projectCopy ??= new ProjectCopy({ client: this.client }))
+  }
+
+  private _remoteAgent?: RemoteAgent
+  get remoteAgent(): RemoteAgent {
+    return (this._remoteAgent ??= new RemoteAgent({ client: this.client }))
   }
 
   private _workspace?: Workspace
