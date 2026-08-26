@@ -99,6 +99,8 @@ Follow `test-requirements.md`'s Demo 1 table exactly (rows 1-6):
    then ask "Run this in my local workspace: cat marker.txt". The remote agent's
    `run_local_command` is bridged to OpenCode's `bash` tool and runs on **your** machine under
    the normal permission prompts, so the reply should quote the file's real contents.
+   See "Testing a remote agent's local tool call" below for the full recipe, including how to
+   make the permission prompt actually appear.
 6b. Optional roster check (WS10): run `/agent` again and pick **Refunds**. The status bar
    bottom-left should now read `Refunds` (not `Support` or `Build`). Ask "Who am I speaking
    with?" — the reply should come from the refunds agent directly, with no triage greeting
@@ -416,3 +418,83 @@ that agent's private conversations.
 Private *from the other agents*, not from the model provider. A private conversation's transcript
 lives service-side with the OpenAI client; only a pointer is stored on our volume. See the WS16
 deviation in `wbs.md`.
+
+## Testing a remote agent's local tool call
+
+A remote agent has no filesystem of its own to inspect — the bridge container mounts only its
+`bridge-checkpoints` and `bridge-sessions` volumes, never your project. Anything it learns about
+your workspace it learns by calling `run_local_command`, which OpenCode maps to its own `bash`
+tool (`RemoteToolBridge` `NAME_MAP`) and runs on your machine, in the session's Location.
+
+### Seed something only the workspace knows
+
+Give the workspace a fact the model cannot guess, so a plausible-looking answer can't pass for a
+real tool call:
+
+```bash
+cd /path/to/your/workspace
+echo 'ticket ACME-4417 opened by finance' > notes.txt
+```
+
+### Make the permission prompt appear
+
+By default nothing prompts. **Gate it with the top-level `permission` key**, not a per-agent one:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "remote_agent": { "servers": [{ "id": "demo-bridge", "url": "http://localhost:8000" }] },
+  "permission": { "bash": "ask" }
+}
+```
+
+A per-agent rule (`agent.<orchestratorID>.permission`) does **not** gate this path. Remote turns
+run through the V1 stream (`packages/opencode/src/session/llm/remote-stream.ts`), which executes
+the mapped tool against the V1 `SessionTools` definitions; those consult the top-level permission
+config. `RemoteToolBridge.execute` in core is the V2 runner's equivalent and is not on the HTTP
+path.
+
+### Drive it
+
+In the TUI: `/agent` → a **Remote · Support Triage** entry → then
+
+> Use run_local_command to run: grep -rn ACME-4417 .
+
+Expect, in order: a `bash` tool card showing `grep -rn ACME-4417 .`, a permission prompt naming
+that exact command, and after approving, the agent quoting `./notes.txt:1:ticket ACME-4417 opened
+by finance`. If it answers without the tool card, it guessed — the bridge did not run.
+
+### Headless equivalent
+
+```bash
+B=http://localhost:4811
+SID=$(curl -s -X POST $B/session -H 'content-type: application/json' -d '{}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -X POST $B/experimental/remote-agent/select -H 'content-type: application/json' \
+  -d "{\"sessionID\":\"$SID\",\"serverID\":\"demo-bridge\",\"orchestratorID\":\"support\"}"
+curl -s -X POST "$B/session/$SID/message" -H 'content-type: application/json' \
+  -d '{"parts":[{"type":"text","text":"Use run_local_command to run: grep -rn ACME-4417 ."}]}'
+```
+
+With `bash: "ask"` the turn blocks; approve it from another shell:
+
+```bash
+PID=$(curl -s $B/permission | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["id"])')
+curl -s -X POST "$B/permission/$PID/reply" -H 'content-type: application/json' -d '{"reply":"once"}'
+```
+
+The returned assistant message carries a `type: "tool"` part with `"tool": "bash"` and the real
+`grep` output in `state.output`.
+
+### Two traps worth knowing
+
+**Stale instances answer for you.** Session work can be served by an older OpenCode process still
+running for the same project, which is holding the config it started with — so config edits look
+like they do nothing. Check with `ps -eo pid,command | grep index.ts` and kill leftovers before
+concluding anything about permissions.
+
+**Mixing config versions used to drop `remote_agent`.** Any v1-only key (`agent`, `permission`,
+`mode`, …) routes the whole file through the v1 migration, and `remote_agent` was not carried
+across — so the **Remote** section silently vanished from `/agent`. Fixed in
+`packages/core/src/v1/config/migrate.ts`; covered by "keeps remote agent servers when a v1-only
+key forces migration" in `packages/core/test/config/config.test.ts`.
