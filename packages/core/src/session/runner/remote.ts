@@ -128,6 +128,51 @@ const connect = (url: string) =>
  */
 const connections = new Map<SessionSchema.ID, RemoteConnection>()
 
+export type Connection = RemoteConnection
+
+/**
+ * Shared connection accessor for callers outside this Location-scoped layer — notably the V1
+ * prompt path's remote LLM stream, which drives the same per-Session socket so both entry
+ * points reuse one remote MAF workflow instance instead of racing two conversations.
+ */
+export const openConnection = Effect.fn("SessionRunner.remote.openConnection")(function* (
+  sessionID: SessionSchema.ID,
+  orchestratorID: string,
+  baseURL: string,
+) {
+  const existing = connections.get(sessionID)
+  if (existing) return existing
+  const connection = yield* connect(toWebSocketURL(baseURL, orchestratorID))
+  connections.set(sessionID, connection)
+  return connection
+})
+
+export const closeConnection = (sessionID: SessionSchema.ID, reason: string) =>
+  Effect.sync(() => {
+    const connection = connections.get(sessionID)
+    if (!connection) return
+    connection.close(reason)
+    connections.delete(sessionID)
+  })
+
+/**
+ * Resolves a configured, enabled remote agent server's base URL from an already-merged config
+ * document. Separate from the Location-scoped layer below because the V1 prompt path reads
+ * config through `ConfigV1` rather than this module's Location-scoped `Config.Service`.
+ */
+export const serverURLFromConfig = Effect.fn("SessionRunner.remote.serverURLFromConfig")(function* (
+  config: {
+    readonly remote_agent?: { readonly servers?: ReadonlyArray<{ id: string; url: string; disabled?: boolean }> }
+  },
+  serverID: string,
+) {
+  const server = config.remote_agent?.servers?.find(
+    (candidate) => candidate.id === serverID && candidate.disabled !== true,
+  )
+  if (!server) return yield* new RemoteAgentError({ message: `Unknown or disabled remote agent server: ${serverID}` })
+  return server.url
+})
+
 /**
  * Best-effort nudge asking the remote orchestrator's active participant to hand off to
  * `agentID`. Advisory only, per WS1's `SteerToAgentFrame` docstring: resolves once the frame is
@@ -172,12 +217,7 @@ const layer = Layer.effect(
       serverID: string,
       orchestratorID: string,
     ) {
-      const existing = connections.get(sessionID)
-      if (existing) return existing
-      const baseURL = yield* resolveServerURL(serverID)
-      const connection = yield* connect(toWebSocketURL(baseURL, orchestratorID))
-      connections.set(sessionID, connection)
-      return connection
+      return yield* openConnection(sessionID, orchestratorID, yield* resolveServerURL(serverID))
     })
 
     /** Bridges one remote turn's frames into the same SessionEvent stream the local runner emits. */

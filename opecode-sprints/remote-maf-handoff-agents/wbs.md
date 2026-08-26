@@ -234,3 +234,91 @@ Deviations from the original plan, made explicitly when implementation started:
   - **Lesson**: WS1-WS4's test suites were correctly scoped to their own layer (unit/API-shape
     tests), but none of them constituted a true Layer-4 (`VERIFY.md`) live run until this
     dogfooding pass — that gap is exactly what Layer 4 exists to catch, and it did.
+
+## WS8 - Rendering remote turns in the TUI (deviation from requirements.md:36)
+
+### Problem
+
+With PR #14 and PR #15 merged, `/agent` listed remote orchestrators, selection bound the
+Session, and the bridge answered correctly — but the TUI showed **nothing** for a remote turn.
+
+### Preliminary investigation and root cause
+
+The whole feature as built through WS1-WS4 is V2-native: `SessionV2.prompt(...)` ->
+`SessionExecution` -> `SessionRunnerRemote` -> `EventV2`. The TUI is not.
+
+- `packages/tui/src/context/sync.tsx` renders the timeline from V1 events only: `message.updated`
+  (line 321) and `message.part.updated` (line 376), loading history via `sdk.client.session.messages`
+  (line 603, V1). `packages/tui/src/context/data.tsx:430` has V2 accessors, but they are consumed
+  only by `prompt/autocomplete.tsx`, never by the timeline.
+- `createLLMEventPublisher` (`packages/core/src/session/runner/publish-llm-event.ts:54`) publishes
+  V2 `SessionEvent.*`. V1 parts come from `Session.updatePart`
+  (`packages/opencode/src/session/session.ts:637`), which the V2 remote runner never calls.
+- Confirmed empirically: `GET /session/{id}/message` returned `[]` for a remote Session while
+  `GET /api/session/{id}/message` returned the full remote transcript.
+- `EventV2Bridge` (`packages/opencode/src/event-v2-bridge.ts`) does re-emit every EventV2 onto
+  `GlobalBus`, so the events reach the TUI over SSE — but `sync.tsx` has no case for V2 event
+  types and drops them.
+
+Note the non-obvious SDK mapping this hides behind: `sdk.client.session.*` is class `Session2`
+(V1 `/session/{id}/message`); `sdk.client.v2.session.*` is class `Session3`
+(V2 `/api/session/{id}/prompt`).
+
+### Options considered
+
+- **A. Server-side V1 -> V2 delegation.** Leaves rendering broken for the same reason as B.
+- **B. Dispatch remote prompts from the TUI to `sdk.client.v2.session.prompt`.** Implemented,
+  then reverted: it makes the turn run correctly and render *nothing*.
+- **D. Full V2 -> V1 event projection.** ~12+ event types plus message lifecycle. Correct
+  long-term, disproportionate for a PoC.
+- **C. Substitute the V1 LLM stream (chosen).** `SessionLLM.Interface.stream`
+  (`packages/opencode/src/session/llm.ts`) is a clean single seam — `processor.ts:640` is its only
+  non-title call site — and `processor.ts` already consumes standard `LLMEvent`s. Substituting it
+  reuses **all** existing V1 persistence, tool execution, permissions, steering, abort and TUI
+  rendering.
+
+### Deviation from requirements.md:36
+
+`requirements.md:36` states remote prompts are "admitted through the normal `SessionV2.prompt(...)`
+durable-input path". That remains true of the V2 entry point, which is unchanged and still works.
+This workstream **adds** a V1 entry point because the TUI has no V2 renderer. The V2 path is the
+intended destination; the V1 substitution is what makes the PoC demonstrable today.
+
+### Resolution
+
+1. `ConfigV1.Info` gained `remote_agent`. The V1 config service parsed `opencode.json` with a
+   schema that dropped the key, and core's `Config` (which has it) is a **Location node** — adding
+   it to the V1 `LLM.node` deps fails at boot with `Unbound layer node: @opencode/Location`.
+2. `SessionRunnerRemote` exports `Connection` / `openConnection` / `closeConnection` /
+   `serverURLFromConfig`, so the V1 path drives the *same* per-Session socket. One MAF workflow
+   instance per Session, no racing conversations.
+3. `packages/opencode/src/session/llm/remote-stream.ts` translates bridge frames to `LLMEvent`s.
+   Handoffs become an inline `↪ handoff: a → b` text segment, matching the V2 runner.
+4. `prompt.ts` derives the target from the Session's workspace sentinel and labels the assistant
+   message with the bound orchestrator instead of the never-called local model.
+
+### Two non-obvious behaviours this required
+
+- **Tools execute inside the bridge stream, not in the V1 loop.** The V1 loop only runs tools the
+  provider itself invoked, and it runs them *after* the stream ends — but the orchestrator blocks
+  awaiting `tool_result` on the live socket, so ending the stream at the tool call deadlocked the
+  turn (observed as a `bash` part stuck `running`, then `Tool execution aborted`). The bridge now
+  invokes the mapped local tool inline, through the same permission-gated `SessionTools`
+  definition a local turn uses, and answers the socket before resuming frame consumption.
+- **Tool parts must be marked `providerExecuted`.** `SessionPrompt`'s loop-exit check
+  (`prompt.ts:1108`) keeps looping while the assistant has tool parts lacking that flag. Without
+  it the same turn replayed ~50 times until the step cap — each replay re-prompting the
+  orchestrator and re-running the local tool.
+
+### Definition of Done - verified
+
+- `POST /session/{id}/message` (V1) on a remote-bound Session returns an assistant message with
+  `providerID: "remote-agent"`, `agent: "support"` and `finish: "stop"`. Verified.
+- `GET /session/{id}/message` (V1) returns exactly 2 messages for one prompt, with `step-start`,
+  a completed `bash` tool part, text and `step-finish`. Verified — previously 52.
+- A remote agent's `run_local_command` really executes in the local workspace: `cat marker.txt`
+  returned `hello-from-workspace` from `/tmp/maf-demo-workspace/marker.txt`. Verified.
+- A second prompt in the same Session continues the same remote conversation and shows a live
+  `↪ handoff: triage → refunds`. Verified.
+- `packages/opencode/test/session/llm-remote-stream.test.ts` covers frame translation against a
+  real WebSocket stub. 2 pass.

@@ -33,18 +33,27 @@ _HANDOFF_COMPLIANCE_INSTRUCTION = (
     "request."
 )
 
+# Every sample agent is given the workspace tool, so state plainly that it exists and is real —
+# otherwise the model refuses local-command requests on the (normally correct) grounds that it
+# has no access to the user's machine.
+_LOCAL_WORKSPACE_INSTRUCTION = (
+    " You have a `run_local_command` tool that really does execute shell commands in the user's "
+    "local workspace on their machine. Use it whenever the user asks you to inspect or change "
+    "files there, and never claim you are unable to run local commands."
+)
+
 _TRIAGE_INSTRUCTIONS = (
     "You are a front-line support triage agent. Greet the user, understand their need, and "
     "hand off to 'billing' for billing/invoice questions or 'refunds' for refund requests. "
-    "Handle anything else yourself. " + _HANDOFF_COMPLIANCE_INSTRUCTION
+    "Handle anything else yourself. " + _HANDOFF_COMPLIANCE_INSTRUCTION + _LOCAL_WORKSPACE_INSTRUCTION
 )
 _BILLING_INSTRUCTIONS = (
     "You are a billing support agent. Help with invoices, charges, and payment methods. "
-    "Hand off to 'refunds' if the user asks about a refund instead. " + _HANDOFF_COMPLIANCE_INSTRUCTION
+    "Hand off to 'refunds' if the user asks about a refund instead. " + _HANDOFF_COMPLIANCE_INSTRUCTION + _LOCAL_WORKSPACE_INSTRUCTION
 )
 _REFUNDS_INSTRUCTIONS = (
     "You are a refunds agent. Help process refund requests and explain refund policy. "
-    "Hand off to 'billing' if the user asks a billing question instead. " + _HANDOFF_COMPLIANCE_INSTRUCTION
+    "Hand off to 'billing' if the user asks a billing question instead. " + _HANDOFF_COMPLIANCE_INSTRUCTION + _LOCAL_WORKSPACE_INSTRUCTION
 )
 
 
