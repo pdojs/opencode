@@ -59,6 +59,16 @@ const toWebSocketURL = (baseURL: string, orchestratorID: string) =>
 class RemoteConnection {
   private queue: Array<RemoteProtocol.ServerFrame | { readonly closed: true }> = []
   private waiters: Array<() => void> = []
+  /**
+   * Whether a consumer is currently relaying frames for this connection. The bridge answers a
+   * `steer_to_agent` frame with a *whole extra turn* (see the sample bridge's
+   * `_frame_to_turn_text`), so a steer sent with no active relay would emit frames nobody
+   * reads — they would sit in `queue` and be mis-attributed to the next prompt. Steering is
+   * therefore refused unless a turn is in flight to absorb the response.
+   */
+  private turnActive = false
+  /** Steer-induced turns sent during the current relay that it must still consume before settling. */
+  private pendingSteerTurns = 0
 
   constructor(private readonly socket: WebSocket) {
     socket.addEventListener("message", (event) => {
@@ -78,6 +88,37 @@ class RemoteConnection {
 
   send(frame: RemoteProtocol.ClientFrame) {
     this.socket.send(RemoteProtocol.encodeClientFrame(frame))
+  }
+
+  /** Marks the start of a relay. Returns false if one is already running for this connection. */
+  beginTurn() {
+    if (this.turnActive) return false
+    this.turnActive = true
+    this.pendingSteerTurns = 0
+    return true
+  }
+
+  endTurn() {
+    this.turnActive = false
+    this.pendingSteerTurns = 0
+  }
+
+  /** Sends a steer frame, recording the extra turn the relay must consume. No-op when idle. */
+  steer(agentID: string) {
+    if (!this.turnActive) return false
+    this.pendingSteerTurns += 1
+    this.send(RemoteProtocol.SteerToAgentFrame.make({ type: "steer_to_agent", agent_id: agentID }))
+    return true
+  }
+
+  /**
+   * Called on `turn_complete`: reports whether the relay should keep consuming because a steer
+   * issued during this turn has its own turn still to come.
+   */
+  consumeSteerTurn() {
+    if (this.pendingSteerTurns === 0) return false
+    this.pendingSteerTurns -= 1
+    return true
   }
 
   /** Waits for and returns the next frame, or undefined once the socket has closed. */
@@ -177,16 +218,14 @@ export const serverURLFromConfig = Effect.fn("SessionRunner.remote.serverURLFrom
  * Best-effort nudge asking the remote orchestrator's active participant to hand off to
  * `agentID`. Advisory only, per WS1's `SteerToAgentFrame` docstring: resolves once the frame is
  * sent, not once a handoff actually happens — the actual outcome is still observed via the
- * normal `handoff` frame relayed as an inline text segment in `runTurn`. No-ops if the Session
- * has no open remote connection (e.g. it hasn't sent a first turn yet, or was interrupted).
+ * normal `handoff` frame relayed as an inline text segment in the turn's stream.
+ *
+ * Returns false (sending nothing) when the Session has no open remote connection, or has one
+ * but no turn in flight. The bridge replies to a steer with a full extra turn, so steering an
+ * idle connection would strand those frames and corrupt the next prompt's stream.
  */
 export const steerToAgent = (sessionID: SessionSchema.ID, agentID: string) =>
-  Effect.sync(() => {
-    const connection = connections.get(sessionID)
-    if (!connection) return false
-    connection.send(RemoteProtocol.SteerToAgentFrame.make({ type: "steer_to_agent", agent_id: agentID }))
-    return true
-  })
+  Effect.sync(() => connections.get(sessionID)?.steer(agentID) ?? false)
 
 const layer = Layer.effect(
   Service,

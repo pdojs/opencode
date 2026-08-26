@@ -36,6 +36,8 @@ export const stream = (input: {
         input.baseURL,
       ).pipe(Effect.mapError((error) => new Error(error.message)));
 
+      connection.beginTurn();
+
       connection.send(
         RemoteProtocol.UserMessageFrame.make({
           type: "user_message",
@@ -44,6 +46,7 @@ export const stream = (input: {
       );
 
       yield* relay(input.sessionID, connection, queue, input.tools).pipe(
+        Effect.ensuring(Effect.sync(() => connection.endTurn())),
         Effect.forkScoped,
       );
     }),
@@ -227,6 +230,10 @@ const relay = Effect.fnUntraced(function* (
         break;
       }
       case "turn_complete":
+        // A steer issued during this turn makes the bridge queue a *whole extra turn* rather
+        // than redirect the current one. Keep relaying so that turn renders inside this same
+        // V1 assistant message; settling here would strand its frames for the next prompt.
+        if (connection.consumeSteerTurn()) break;
         return yield* settle();
       case "error":
         return yield* Queue.fail(queue, new Error(frame.message));
