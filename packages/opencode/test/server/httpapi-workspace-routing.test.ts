@@ -456,6 +456,22 @@ describe("HttpApi workspace routing middleware", () => {
     }),
   )
 
+  it.live("keeps remote-agent sentinel workspaces local instead of resolving them", () =>
+    Effect.gen(function* () {
+      // remote:<serverID>:<orchestratorID> is a synthetic remote-agent binding,
+      // not a persisted workspace row. Resolving it against the registry would
+      // 500 with "Workspace not found"; it must fall through to the local
+      // handler so SessionRunnerRemote can service it in-process.
+      const workspaceID = "remote:demo-bridge:support"
+      yield* serveProbe
+
+      const response = yield* HttpClient.get(`/probe?workspace=${workspaceID}`)
+
+      expect(response.status).toBe(200)
+      expect(yield* Schema.decodeUnknownEffect(ProbeResult)(yield* response.json)).toMatchObject({ workspaceID })
+    }),
+  )
+
   it.live("keeps control-plane routes local even when workspace is selected", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })

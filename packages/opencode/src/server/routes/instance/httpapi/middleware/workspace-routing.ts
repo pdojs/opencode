@@ -1,4 +1,5 @@
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { SessionRunnerRemote } from "@opencode-ai/core/session/runner/remote"
 import type { Target } from "@/control-plane/types"
 import { Workspace } from "@/control-plane/workspace"
 import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
@@ -168,6 +169,18 @@ function planRequest(
       ? selectedV2WorkspaceID(url, session?.workspaceID)
       : selectedWorkspaceID(url, session?.workspaceID)
     if (workspaceID === InvalidWorkspaceID) return RequestPlan.InvalidWorkspace()
+
+    // remote:<serverID>:<orchestratorID> is a synthetic binding, not a persisted
+    // workspace row. It is serviced on this process by swapping in
+    // SessionRunnerRemote (see buildLocationServiceMap), so it must never be
+    // resolved against the workspace registry or proxied to another instance.
+    if (SessionRunnerRemote.isRemoteWorkspaceID(workspaceID)) {
+      return RequestPlan.Local({
+        directory: session?.directory || defaultDirectory(request, url),
+        workspaceID,
+      })
+    }
+
     const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
 
     if (workspaceID && workspace === undefined && !envWorkspaceID) {
