@@ -8,6 +8,7 @@ import { usePluginRuntime } from "../../plugin/runtime"
 
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
+import { SidebarRemoteSessions } from "./sidebar-remote-sessions"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
@@ -82,6 +83,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                 </Show>
               </box>
             </pluginRuntime.Slot>
+            <SidebarRemoteSessions sessionID={props.sessionID} />
             <pluginRuntime.Slot name="sidebar_content" session_id={props.sessionID} />
           </box>
         </scrollbox>
