@@ -83,6 +83,18 @@ class TurnCompleteFrame(BaseModel):
     type: Literal["turn_complete"] = "turn_complete"
 
 
+class SessionResumedFrame(BaseModel):
+    """Sent on connect when a prior conversation for this session was restored from a checkpoint.
+
+    Informational: the client already has its own durable transcript, so this exists to tell the
+    user they rejoined an existing conversation rather than started a new one.
+    """
+
+    type: Literal["session_resumed"] = "session_resumed"
+    session_id: str
+    checkpoint_id: str
+
+
 class ErrorFrame(BaseModel):
     """An unrecognized frame type or a server-side failure, sent back to the client."""
 
@@ -91,7 +103,7 @@ class ErrorFrame(BaseModel):
 
 
 ServerFrame = Annotated[
-    Union[AssistantDeltaFrame, HandoffFrame, ToolCallFrame, TurnCompleteFrame, ErrorFrame],
+    Union[AssistantDeltaFrame, HandoffFrame, ToolCallFrame, TurnCompleteFrame, SessionResumedFrame, ErrorFrame],
     Field(discriminator="type"),
 ]
 
