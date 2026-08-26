@@ -1,0 +1,54 @@
+# WS5 (compose-dev-env): local dev environment for the remote MAF handoff-bridge PoC.
+#
+# Starts:
+#   - bridge   — the WS1 FastAPI/WebSocket handoff-bridge container
+#                (test/remote-maf-handoff-agents), exposing GET /agents/manifest and
+#                WS /agents/{id}/session on :8000.
+#   - phoenix  — a local Arize Phoenix instance (official published image, SQLite-backed,
+#                no Postgres needed for this PoC) receiving OTel traces from `bridge` over
+#                OTLP/gRPC and exposing its UI on :6006.
+#
+# Usage (from the repo root):
+#   export OPENAI_API_KEY=sk-...          # required: app/orchestrator.py's sample agents are
+#                                          # OpenAI-backed (see the note below on non-GitHub
+#                                          # LLM endpoints for MAF agents)
+#   docker compose -f opecode-sprints/remote-maf-handoff-agents/docker-compose.yml up --build
+#   curl localhost:8000/agents/manifest   # should return the "support" orchestrator manifest
+#   open http://localhost:6006            # Phoenix UI
+#
+# See VERIFY.md in this folder for the full manual end-to-end demo script (Demos 1-3 from
+# test-requirements.md) that exercises this environment against a real local OpenCode + a real
+# local workspace directory.
+#
+# Note on LLM endpoints: the bridge's sample agents (app/orchestrator.py) call OpenAI's API
+# directly via OPENAI_API_KEY — they do NOT use whatever LLM endpoint the OpenCode harness
+# itself is configured with (e.g. a GitHub Copilot-backed model). This is intentional: a MAF
+# orchestrator is an independent agent host and may be backed by any provider (OpenAI, Claude,
+# Azure OpenAI, etc.) unrelated to the harness's own model config. Swap the env vars below
+# (and orchestrator.py's OpenAIChatClient() construction) if you want to point the sample
+# agents at Azure OpenAI or another OpenAI-compatible endpoint instead.
+
+services:
+  bridge:
+    build:
+      context: ../../test/remote-maf-handoff-agents
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY to run the bridge's sample agents}
+      - PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:4317
+      - OTEL_SERVICE_NAME=remote-maf-handoff-bridge
+    depends_on:
+      - phoenix
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/agents/manifest')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006" # Phoenix UI + HTTP OTLP
+      - "4317:4317" # OTLP gRPC collector (used by the bridge's telemetry.py)
