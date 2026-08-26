@@ -86,6 +86,23 @@ export class OrchestratorManifestEntry extends Schema.Class<OrchestratorManifest
   name: Schema.String,
   description: Schema.String,
   participants: Schema.Array(Participant),
+  /**
+   * Capability fields mirroring `OrchestratorManifestEntry` in the bridge's `app/protocol.py`.
+   * Optional so an older bridge still parses; consumers fall back to handoff semantics, which
+   * is what every orchestrator shipped before these fields existed.
+   */
+  pattern: Schema.optional(Schema.String),
+  /**
+   * How much of the conversation each participant sees. `shared` (handoff, group chat) means
+   * every participant observes the whole conversation; `scoped` (sequential) means each sees
+   * only what the previous one passed down; `isolated` (concurrent) means each sees only the
+   * original user input.
+   */
+  context_scope: Schema.optional(Schema.Union([Schema.Literal("shared"), Schema.Literal("scoped"), Schema.Literal("isolated")])),
+  /** False for single-shot patterns, where turn 2 has no memory of turn 1. */
+  multi_turn: Schema.optional(Schema.Boolean),
+  /** False when the pattern has no notion of a start agent, so participants cannot be targeted. */
+  addressable: Schema.optional(Schema.Boolean),
 }) {}
 
 export class Manifest extends Schema.Class<Manifest>("RemoteProtocol.Manifest")({

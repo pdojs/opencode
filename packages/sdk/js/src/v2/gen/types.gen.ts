@@ -3898,6 +3898,10 @@ export type RemoteProtocolOrchestratorManifestEntry = {
   name: string
   description: string
   participants: Array<RemoteProtocolParticipant>
+  pattern?: string
+  context_scope?: "shared" | "scoped" | "isolated"
+  multi_turn?: boolean
+  addressable?: boolean
 }
 
 export type RemoteProtocolManifest = {

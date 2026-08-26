@@ -40,12 +40,7 @@ export const stream = (input: {
 
       connection.beginTurn();
 
-      connection.send(
-        RemoteProtocol.UserMessageFrame.make({
-          type: "user_message",
-          text: input.text,
-        }),
-      );
+      connection.sendUserTurn(input.text);
 
       yield* relay(input.sessionID, connection, queue, input.tools).pipe(
         Effect.ensuring(Effect.sync(() => connection.endTurn())),

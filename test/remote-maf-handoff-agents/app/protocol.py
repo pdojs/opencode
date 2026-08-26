@@ -105,10 +105,37 @@ class Participant(BaseModel):
 
 
 class OrchestratorManifestEntry(BaseModel):
+    """Manifest metadata for one orchestrator, including the interaction semantics a client
+    needs in order to model a session correctly.
+
+    The capability fields exist because MAF's five orchestration patterns do NOT share a
+    session model, and a client that assumes handoff semantics everywhere will silently
+    corrupt or discard conversation state on the other four. See `orchestrator.py`'s
+    `PATTERN_SEMANTICS` for the per-pattern derivation and its source citations.
+    """
+
     id: str
     name: str
     description: str
     participants: list[Participant]
+    # One of the five MAF orchestration patterns: sequential | concurrent | handoff |
+    # group_chat | magentic.
+    pattern: str = "handoff"
+    # How much conversation each participant sees:
+    #   shared   — every agent sees the full conversation (handoff, group_chat, magentic,
+    #              sequential by default)
+    #   scoped   — an agent sees only what the previous one passed down (sequential with
+    #              chain_only_agent_responses=True)
+    #   isolated — each agent sees only the original user input, never each other's
+    #              (concurrent)
+    context_scope: str = "shared"
+    # Whether the workflow natively continues across user turns inside one run (handoff's
+    # request_info loop). When false, each user turn is a fresh single-shot run and the
+    # client must not assume the agents remember anything from the previous turn.
+    multi_turn: bool = True
+    # Whether a client may direct a turn at a named participant (handoff's start agent).
+    # When false, the pattern itself decides who speaks and any such request is refused.
+    addressable: bool = True
 
 
 class Manifest(BaseModel):

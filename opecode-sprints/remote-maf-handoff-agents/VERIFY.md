@@ -232,3 +232,64 @@ Verified after enabling: the OpenInference processor translates
 `gen_ai.input.messages`/`gen_ai.output.messages` into the `llm.input_messages.*` /
 `llm.output_messages.*` attributes Phoenix's UI renders, and `execute_tool run_local_command`
 spans carry both the command (`input.value` = `{"command": "cat marker.txt"}`) and its output.
+
+## WS12 — per-pattern session semantics
+
+### Manifest advertises capabilities
+
+```bash
+curl -s localhost:8000/agents/manifest | python3 -m json.tool
+```
+
+Each orchestrator carries `pattern`, `context_scope`, `multi_turn` and `addressable`. For the
+sample support group: `handoff` / `shared` / `true` / `true`.
+
+The values are not the intuitive ones. Handoff broadcasts the whole conversation to every
+participant; **concurrent** is the narrow pass-down. Group chat, magentic and sequential are
+single-shot, so a second user turn is a new run with no memory of the first.
+
+### Switching participant keeps the conversation
+
+In the TUI, with a remote orchestrator selected:
+
+1. Say `My invoice INV-4471 was charged twice.`
+2. Run `/agent` and pick a different participant (e.g. **Refunds**).
+3. Ask `Which invoice number did I mention?`
+
+The newly-picked agent answers `INV-4471`. Before WS12 this lost the conversation entirely,
+because changing participant reconnected the socket and the MAF workflow behind it.
+
+The status bar should show the picked participant, and the responder should be that participant
+— not whichever agent was answering before.
+
+### Phoenix names the agents that handled the turn
+
+Open Phoenix at <http://localhost:6006> and look at the root spans. Each turn now has a span
+named for its handoff chain, e.g.:
+
+```
+turn support/triage→billing→refunds
+```
+
+Its attributes carry `maf.orchestrator.id`, `maf.orchestrator.pattern`, `maf.agents.engaged`,
+`maf.agent.responding` and `session.id`. Phoenix groups on `session.id`, so a whole conversation
+can be pulled up from the OpenCode session it came from.
+
+To assert on this without the UI:
+
+```bash
+curl -s localhost:6006/graphql -H 'content-type: application/json' \
+  -d '{"query":"{ projects(first:1){edges{node{ spans(first:50, sort:{col:startTime,dir:desc}){edges{node{ name attributes }}} }}} }"}'
+```
+
+### Content capture is off by default
+
+With a default `docker compose up`, no span contains conversation text — only metadata. To
+inspect prompts and completions during local testing:
+
+```bash
+ENABLE_SENSITIVE_DATA=true docker compose -f docker-compose.yml up -d bridge
+```
+
+Never enable it against a shared or hosted collector: it exports raw conversation text,
+including anything an agent read out of the local workspace via `run_local_command`.

@@ -23,6 +23,14 @@ import { RemoteAgentError, Service } from "./index"
 /** Prefix identifying a remote-orchestrator Location, e.g. `remote:bridge-1:support`. */
 const WORKSPACE_ID_PREFIX = "remote:"
 
+/**
+ * Phrasing for an in-conversation participant switch. Advisory, exactly like a steer: MAF's
+ * handoff routing is decided by the active agent's own tool calls, so this asks rather than
+ * commands (see RemoteProtocol.SteerToAgentFrame and design-proposal.md WS1).
+ */
+const REDIRECT_INSTRUCTION = (agentID: string) =>
+  `[The user has switched to '${agentID}'. Hand off to '${agentID}' now, then answer as that agent.]`
+
 export const isRemoteWorkspaceID = (workspaceID: string | undefined): workspaceID is string =>
   workspaceID !== undefined && workspaceID.startsWith(WORKSPACE_ID_PREFIX)
 
@@ -46,9 +54,23 @@ const findLatestUserText = (entries: ReadonlyArray<{ readonly message: { type: s
   return undefined
 }
 
-const toWebSocketURL = (baseURL: string, orchestratorID: string, participantID?: string) =>
-  `${baseURL.replace(/^http/, "ws").replace(/\/$/, "")}/agents/${orchestratorID}/session` +
-  (participantID ? `?start_agent=${encodeURIComponent(participantID)}` : "")
+const toWebSocketURL = (
+  baseURL: string,
+  orchestratorID: string,
+  participantID?: string,
+  sessionID?: string,
+) => {
+  const query = new URLSearchParams()
+  if (participantID) query.set("start_agent", participantID)
+  // Correlates the bridge's OTel spans with this Session so a trace in Phoenix can be traced
+  // back to the conversation that produced it.
+  if (sessionID) query.set("session_id", sessionID)
+  const search = query.toString()
+  return (
+    `${baseURL.replace(/^http/, "ws").replace(/\/$/, "")}/agents/${orchestratorID}/session` +
+    (search ? `?${search}` : "")
+  )
+}
 
 /**
  * One long-lived WS connection per Session, held for the Location's lifetime so the remote
@@ -70,6 +92,8 @@ class RemoteConnection {
   private turnActive = false
   /** Steer-induced turns sent during the current relay that it must still consume before settling. */
   private pendingSteerTurns = 0
+  /** Participant the user re-targeted this session at, applied to the next user turn. */
+  private pendingRedirect: string | undefined
 
   constructor(private readonly socket: WebSocket) {
     socket.addEventListener("message", (event) => {
@@ -89,6 +113,32 @@ class RemoteConnection {
 
   send(frame: RemoteProtocol.ClientFrame) {
     this.socket.send(RemoteProtocol.encodeClientFrame(frame))
+  }
+
+  /**
+   * Records that the user re-targeted this session at a different participant. Applied to the
+   * next user turn rather than sent immediately: a steer frame is only safe mid-turn (the bridge
+   * answers it with a whole extra turn, which would otherwise be stranded), and a participant
+   * switch normally happens while the session is idle.
+   *
+   * Redirecting beats reconnecting because the MAF workflow — and therefore the entire shared
+   * conversation every participant can see — lives for exactly as long as this socket.
+   * Reconnecting to change the start agent would silently discard it.
+   */
+  redirectTo(agentID: string) {
+    this.pendingRedirect = agentID
+  }
+
+  /** Sends the next user turn, folding in any pending participant redirect. */
+  sendUserTurn(text: string) {
+    const redirect = this.pendingRedirect
+    this.pendingRedirect = undefined
+    this.send(
+      RemoteProtocol.UserMessageFrame.make({
+        type: "user_message",
+        text: redirect ? `${REDIRECT_INSTRUCTION(redirect)}\n\n${text}` : text,
+      }),
+    )
   }
 
   /** Marks the start of a relay. Returns false if one is already running for this connection. */
@@ -168,7 +218,13 @@ const connect = (url: string) =>
  * the same Location ref, but callers of `steerToAgent` (WS4's UI action) don't hold a reference
  * to that Location's layer closure.
  */
-const connections = new Map<SessionSchema.ID, { readonly url: string; readonly connection: RemoteConnection }>()
+type Bound = {
+  readonly orchestratorURL: string
+  readonly participantID: string | undefined
+  readonly connection: RemoteConnection
+}
+
+const connections = new Map<SessionSchema.ID, Bound>()
 
 export type Connection = RemoteConnection
 
@@ -183,17 +239,27 @@ export const openConnection = Effect.fn("SessionRunner.remote.openConnection")(f
   baseURL: string,
   participantID?: string,
 ) {
-  const url = toWebSocketURL(baseURL, orchestratorID, participantID)
+  const orchestratorURL = toWebSocketURL(baseURL, orchestratorID)
   const existing = connections.get(sessionID)
-  // A rebind to a different orchestrator or participant needs a fresh workflow instance; the
-  // start agent is fixed for the lifetime of the bridge-side connection.
-  if (existing && existing.url === url) return existing.connection
+
+  if (existing && existing.orchestratorURL === orchestratorURL) {
+    if (existing.participantID === participantID) return existing.connection
+    // Same workflow, different participant. The whole conversation — which in a handoff network
+    // every participant can see — lives in the MAF workflow behind this socket, so switching
+    // agents must redirect the running conversation rather than start a new one. `start_agent`
+    // is fixed at connect time, hence the in-conversation redirect on the next turn.
+    if (participantID) existing.connection.redirectTo(participantID)
+    connections.set(sessionID, { orchestratorURL, participantID, connection: existing.connection })
+    return existing.connection
+  }
+
+  // A different orchestrator is a genuinely different workflow; nothing to carry over.
   if (existing) {
-    existing.connection.close("rebound to a different remote agent")
+    existing.connection.close("rebound to a different remote orchestrator")
     connections.delete(sessionID)
   }
-  const connection = yield* connect(url)
-  connections.set(sessionID, { url, connection })
+  const connection = yield* connect(toWebSocketURL(baseURL, orchestratorID, participantID, sessionID))
+  connections.set(sessionID, { orchestratorURL, participantID, connection })
   return connection
 })
 
@@ -276,7 +342,7 @@ const layer = Layer.effect(
       connection: RemoteConnection,
       text: string,
     ) {
-      connection.send(RemoteProtocol.UserMessageFrame.make({ type: "user_message", text }))
+      connection.sendUserTurn(text)
       const publisher = createLLMEventPublisher(events, {
         sessionID,
         agent: orchestratorID,

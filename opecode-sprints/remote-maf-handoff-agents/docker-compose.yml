@@ -44,11 +44,17 @@ services:
       # Agent Framework emits only metadata (token counts, durations, operation names) unless
       # this is set: prompts, completions, tool arguments and tool results are all gated behind
       # it (ObservabilitySettings.enable_sensitive_data defaults to False). Without it Phoenix
-      # shows the trace tree but every message pane is empty. Defaulted on here because this is
-      # a local PoC talking to a Phoenix on localhost; set it to false if you ever point
-      # PHOENIX_COLLECTOR_ENDPOINT at a shared or hosted backend, since it exports raw
-      # conversation content including anything read out of your local workspace.
-      - ENABLE_SENSITIVE_DATA=${ENABLE_SENSITIVE_DATA:-true}
+      # shows the trace tree but every message pane is empty.
+      #
+      # Defaults to OFF: turning it on exports raw conversation content to the collector,
+      # including whatever an agent reads out of your local workspace via run_local_command.
+      # Opt in per-run when you are debugging a demo and the collector is a Phoenix on
+      # localhost that you control:
+      #
+      #   ENABLE_SENSITIVE_DATA=true docker compose -f ... up -d bridge
+      #
+      # Never enable it against a shared or hosted backend.
+      - ENABLE_SENSITIVE_DATA=${ENABLE_SENSITIVE_DATA:-false}
     depends_on:
       - phoenix
     healthcheck:

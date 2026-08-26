@@ -27,10 +27,16 @@ RunLocalCommand = Callable[[str], Awaitable[str]]
 # `steer_to_agent` nudge (design-proposal.md WS1) is honored whenever it's on-topic for the
 # agent to comply with. This does not make steering a hard override — see test-requirements.md
 # Demo 3 row 14 for the documented negative case.
+# Unconditional on purpose. The client turns a participant switch in its agent picker into an
+# explicit named handoff request in the user turn, so this is a direct user directive about who
+# they want to talk to — not a hint the agent should weigh against its own view of the request.
+# An earlier "unless clearly irrelevant" escape hatch caused agents to keep answering questions
+# they judged to be in their own lane, so a picked agent never became the responder.
 _HANDOFF_COMPLIANCE_INSTRUCTION = (
     "If the user explicitly asks to be transferred or handed off to a specific colleague by "
-    "name, comply by handing off to them, unless doing so would be clearly irrelevant to their "
-    "request."
+    "name, hand off to them immediately, before answering anything else. Do not answer the "
+    "request yourself first, and do not decide on the user's behalf that you are the better "
+    "fit. The user chooses who they talk to."
 )
 
 # Every sample agent is given the workspace tool, so state plainly that it exists and is real —
@@ -57,6 +63,38 @@ _REFUNDS_INSTRUCTIONS = (
 )
 
 
+# Interaction semantics per MAF orchestration pattern, derived by reading the orchestration
+# builders in agent_framework rather than by assumption — the five patterns genuinely differ,
+# and the differences are not the ones intuition suggests.
+#
+# The notable surprise: **handoff broadcasts the full conversation to every participant**. It is
+# not a narrow pass-down. Each agent keeps a synchronized replica of the whole conversation, so
+# after `triage` hands off to `refunds`, `refunds` already knows everything the user told
+# `triage`. Handoff is the *only* pattern with first-class multi-turn support: it emits a
+# `request_info` event after each turn, and `workflow.run(responses={id: ...})` continues the
+# same run indefinitely with that shared context intact.
+#
+# Conversely **concurrent is the narrow one**: every agent receives only the original user input
+# and never sees any other agent's output.
+#
+# Sequential defaults to forwarding the full conversation down the chain, but narrows to just
+# the preceding agent's reply when built with `chain_only_agent_responses=True` — so its scope is
+# a property of how the workflow was built, which is why `OrchestratorSpec` declares it per
+# orchestrator rather than deriving it from the pattern name alone.
+#
+# Group chat and magentic share the full conversation but are single-shot: the run terminates
+# when the orchestrator decides it is done, so a second user turn is necessarily a new run with
+# no memory of the first. A client must not present those as continuous conversations.
+PATTERN_SEMANTICS: Mapping[str, tuple[str, bool, bool]] = {
+    # pattern: (context_scope, multi_turn, addressable)
+    "handoff": ("shared", True, True),
+    "group_chat": ("shared", False, False),
+    "magentic": ("shared", False, False),
+    "sequential": ("shared", False, False),
+    "concurrent": ("isolated", False, False),
+}
+
+
 @dataclass(frozen=True)
 class OrchestratorSpec:
     """Manifest metadata plus a factory for the underlying Workflow.
@@ -76,12 +114,22 @@ class OrchestratorSpec:
     # can list and address every agent in the network individually. Ids missing here fall back
     # to the id itself as the name.
     participant_details: Mapping[str, tuple[str, str]] = field(default_factory=dict)
+    # Which MAF orchestration pattern this workflow is built with. Drives the interaction
+    # semantics advertised in the manifest; see PATTERN_SEMANTICS above.
+    pattern: str = "handoff"
+    # Overrides the pattern's default context scope. Needed for sequential workflows built with
+    # `chain_only_agent_responses=True`, whose scope is "scoped" rather than the pattern default.
+    context_scope_override: str | None = None
 
     def manifest_entry(self) -> OrchestratorManifestEntry:
         return OrchestratorManifestEntry(
             id=self.id,
             name=self.name,
             description=self.description,
+            pattern=self.pattern,
+            context_scope=self.context_scope_override or PATTERN_SEMANTICS[self.pattern][0],
+            multi_turn=PATTERN_SEMANTICS[self.pattern][1],
+            addressable=PATTERN_SEMANTICS[self.pattern][2],
             participants=[
                 Participant(
                     id=pid,

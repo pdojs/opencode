@@ -50,7 +50,10 @@ export function DialogAgent() {
           description: orchestrator.description || `remote · ${server.id}`,
           category: `Remote · ${orchestrator.name}`,
         },
-        ...(orchestrator.participants ?? []).map((participant) => ({
+        // Only patterns with a notion of a start agent can be targeted at a single participant.
+        // Concurrent, sequential, group chat and magentic have none, and the bridge refuses
+        // `start_agent` for them with close code 4400 — so don't offer entries that can't work.
+        ...(orchestrator.addressable === false ? [] : (orchestrator.participants ?? [])).map((participant) => ({
           value: {
             type: "remote",
             serverID: server.id,

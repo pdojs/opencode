@@ -19,7 +19,9 @@ from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffSentE
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
-from .orchestrator import OrchestratorSpec, default_orchestrators
+from opentelemetry import trace
+
+from .orchestrator import PATTERN_SEMANTICS, OrchestratorSpec, default_orchestrators
 from .protocol import (
     AssistantDeltaFrame,
     ClientFrame,
@@ -34,6 +36,9 @@ from .protocol import (
 from .telemetry import configure_telemetry
 
 logger = logging.getLogger("remote_maf_handoff_bridge")
+# Resolved lazily per span, so it picks up whichever TracerProvider `configure_telemetry()`
+# installed regardless of import order; a no-op provider when telemetry is unconfigured.
+_tracer = trace.get_tracer("remote_maf_handoff_bridge")
 
 # Timeout for a single client-executed tool call round trip. Chosen generously since it covers
 # real shell commands/file edits a human may need to approve locally, not just fast lookups.
@@ -54,7 +59,12 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
         return Manifest(orchestrators=[spec.manifest_entry() for spec in registry.values()])
 
     @app.websocket("/agents/{orchestrator_id}/session")
-    async def session(websocket: WebSocket, orchestrator_id: str, start_agent: str | None = None) -> None:
+    async def session(
+        websocket: WebSocket,
+        orchestrator_id: str,
+        start_agent: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
         spec = registry.get(orchestrator_id)
         if spec is None:
             await websocket.close(code=4404, reason=f"unknown orchestrator '{orchestrator_id}'")
@@ -64,6 +74,16 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
         # normally from wherever the conversation starts.
         if start_agent is not None and start_agent not in spec.participant_ids:
             await websocket.close(code=4404, reason=f"unknown participant '{start_agent}' in '{orchestrator_id}'")
+            return
+        # Only patterns whose entry point is a client decision can honour `start_agent`. In group
+        # chat, magentic, sequential and concurrent workflows the pattern itself decides who
+        # speaks, so silently ignoring the request would leave the client believing it addressed
+        # an agent it did not.
+        if start_agent is not None and not PATTERN_SEMANTICS[spec.pattern][2]:
+            await websocket.close(
+                code=4400,
+                reason=f"'{orchestrator_id}' is a {spec.pattern} workflow; its participants are not directly addressable",
+            )
             return
 
         await websocket.accept()
@@ -128,7 +148,23 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
                         responses={pending_request_id: HandoffAgentUserRequest.create_response(text)},
                     )
                 )
-                pending_request_id = await _consume_workflow_events(stream, websocket)
+                # A bridge-owned span per user turn. Without it the Phoenix trace list shows only
+                # `workflow.run` / `workflow.build`, and identifying which agent actually answered
+                # means drilling into the executor tree. This span names the engaged agents up
+                # front and carries the session correlation id.
+                with _tracer.start_as_current_span(f"turn {orchestrator_id}") as span:
+                    span.set_attribute("maf.orchestrator.id", orchestrator_id)
+                    span.set_attribute("maf.orchestrator.pattern", spec.pattern)
+                    if start_agent:
+                        span.set_attribute("maf.start_agent", start_agent)
+                    if session_id:
+                        span.set_attribute("session.id", session_id)
+                    engaged: list[str] = []
+                    pending_request_id = await _consume_workflow_events(stream, websocket, engaged)
+                    if engaged:
+                        span.set_attribute("maf.agents.engaged", engaged)
+                        span.set_attribute("maf.agent.responding", engaged[-1])
+                        span.update_name(f"turn {orchestrator_id}/{'→'.join(engaged)}")
         finally:
             reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -155,7 +191,9 @@ def _parse_client_frame(raw: dict) -> ClientFrame:
     return TypeAdapter(ClientFrame).validate_python(raw)
 
 
-async def _consume_workflow_events(stream: AsyncIterable[WorkflowEvent], websocket: WebSocket) -> str | None:
+async def _consume_workflow_events(
+    stream: AsyncIterable[WorkflowEvent], websocket: WebSocket, engaged: list[str] | None = None
+) -> str | None:
     """Consume workflow events, translate to wire frames, send over `websocket`.
 
     Returns the `request_id` of a pending `request_info` event if the workflow is now waiting
@@ -167,10 +205,19 @@ async def _consume_workflow_events(stream: AsyncIterable[WorkflowEvent], websock
         if event.type == "output":
             text = _extract_text(event.data)
             if text:
-                await websocket.send_json(
-                    AssistantDeltaFrame(agent_id=event.executor_id or "unknown", text=text).model_dump()
-                )
+                agent_id = event.executor_id or "unknown"
+                # Ordered, de-duplicated: the turn's handoff chain, e.g. ["triage", "refunds"].
+                if engaged is not None and (not engaged or engaged[-1] != agent_id):
+                    engaged.append(agent_id)
+                await websocket.send_json(AssistantDeltaFrame(agent_id=agent_id, text=text).model_dump())
         elif event.type == "handoff_sent" and isinstance(event.data, HandoffSentEvent):
+            # Handoff edges, not just responders: an agent that hands off without emitting output
+            # still participated, and the target is the one that will answer next. Without this
+            # the chain collapses to whoever happened to speak last.
+            if engaged is not None:
+                for agent_id in (event.data.source, event.data.target):
+                    if not engaged or engaged[-1] != agent_id:
+                        engaged.append(agent_id)
             await websocket.send_json(HandoffFrame(source=event.data.source, target=event.data.target).model_dump())
         elif event.type == "request_info":
             pending_request_id = event.request_id
