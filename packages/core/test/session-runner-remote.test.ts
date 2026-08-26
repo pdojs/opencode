@@ -18,11 +18,24 @@ describe("SessionRunnerRemote workspace ID encoding", () => {
     expect(SessionRunnerRemote.parseRemoteWorkspaceID(workspaceID)).toEqual({
       serverID: "bridge-1",
       orchestratorID: "support",
+      participantID: undefined,
+    })
+  })
+
+  test("round-trips the optional participant segment addressing one agent in the network", () => {
+    const workspaceID = SessionRunnerRemote.remoteWorkspaceID("bridge-1", "support", "refunds")
+    expect(workspaceID).toBe("remote:bridge-1:support:refunds")
+    expect(SessionRunnerRemote.parseRemoteWorkspaceID(workspaceID)).toEqual({
+      serverID: "bridge-1",
+      orchestratorID: "support",
+      participantID: "refunds",
     })
   })
 
   test("returns undefined for a malformed remote workspace ID with no orchestrator segment", () => {
     expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1")).toBeUndefined()
+    expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1:support:")).toBeUndefined()
+    expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1:support:a:b")).toBeUndefined()
   })
 })
 

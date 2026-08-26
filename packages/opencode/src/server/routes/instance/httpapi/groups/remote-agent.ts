@@ -23,6 +23,9 @@ export const SelectPayload = Schema.Struct({
   sessionID: SessionID,
   serverID: Schema.String,
   orchestratorID: Schema.String,
+  // Binds the session directly to one participant of the orchestrator's handoff network rather
+  // than to its default start agent. Handoffs still apply from wherever the conversation begins.
+  participantID: Schema.optional(Schema.String),
 })
 
 export const SelectResponse = Schema.Struct({

@@ -57,8 +57,26 @@ export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote
           data: { message: `Unknown or disabled remote agent server: ${ctx.payload.serverID}` },
         })
 
+      if (ctx.payload.participantID !== undefined) {
+        const manifest = yield* RemoteAgentManifest.fetchManifest(server).pipe(
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
+        const orchestrator = manifest?.orchestrators.find((entry) => entry.id === ctx.payload.orchestratorID)
+        if (!orchestrator?.participants.some((entry) => entry.id === ctx.payload.participantID))
+          return yield* new RemoteAgentServerNotFoundError({
+            name: "RemoteAgentServerNotFoundError",
+            data: {
+              message: `Unknown participant '${ctx.payload.participantID}' on orchestrator '${ctx.payload.orchestratorID}'`,
+            },
+          })
+      }
+
       const workspaceID = WorkspaceV2.ID.make(
-        SessionRunnerRemote.remoteWorkspaceID(ctx.payload.serverID, ctx.payload.orchestratorID),
+        SessionRunnerRemote.remoteWorkspaceID(
+          ctx.payload.serverID,
+          ctx.payload.orchestratorID,
+          ctx.payload.participantID,
+        ),
       )
       yield* session.setWorkspace({ sessionID: ctx.payload.sessionID, workspaceID })
 
