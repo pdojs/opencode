@@ -51,6 +51,10 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     attachments: info.attachment,
     tool_output: info.tool_output,
     mcp: mcp(info),
+    // Same shape in both versions, but it still has to be carried across explicitly: any single
+    // v1 key in the file routes the whole document through this migration, and anything omitted
+    // here is dropped silently.
+    remote_agent: info.remote_agent,
     compaction: info.compaction && {
       auto: info.compaction.auto,
       prune: info.compaction.prune,

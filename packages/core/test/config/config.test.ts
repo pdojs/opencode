@@ -143,6 +143,17 @@ describe("Config", () => {
     }),
   )
 
+  it.effect("keeps remote agent servers when a v1-only key forces migration", () =>
+    Effect.sync(() => {
+      expect(
+        ConfigMigrateV1.migrate({
+          agent: { reviewer: { prompt: "Review changes." } },
+          remote_agent: { servers: [{ id: "demo-bridge", url: "http://localhost:8000" }] },
+        }).remote_agent,
+      ).toEqual({ servers: [{ id: "demo-bridge", url: "http://localhost:8000" }] })
+    }),
+  )
+
   it.live("returns an empty configuration when directory files do not exist", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
