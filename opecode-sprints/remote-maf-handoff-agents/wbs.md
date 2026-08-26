@@ -483,3 +483,83 @@ surfacing them would have produced an unreadable list.
   labelled `agent: refunds` answering "You're speaking with a refunds agent…"; re-selecting
   `billing` on the same session reconnects and answers as billing; `participantID: "nope"` is
   rejected; omitting `participantID` still yields `remote:demo-bridge:support`.
+
+---
+
+## WS11 — telemetry-message-content (added after WS10)
+
+### Goal
+
+Phoenix shows what the agents actually said and did, not just the shape of each run.
+
+### Problem
+
+The Phoenix trace tree rendered correctly — spans, durations, token counts, the handoff
+structure — but every message pane was empty. Agent inputs and outputs were never reaching
+OpenTelemetry at all.
+
+### Preliminary investigation and root cause
+
+Agent Framework splits telemetry into two independent switches, and `docker-compose.yml` set
+only the first:
+
+| Switch | Read by | Default | Governs |
+| --- | --- | --- | --- |
+| `PHOENIX_COLLECTOR_ENDPOINT` | `app/telemetry.py:28` | unset | whether spans are exported at all |
+| `ENABLE_SENSITIVE_DATA` | `agent_framework/observability.py:1108` | **false** | whether spans carry message content |
+
+`ObservabilitySettings.enable_sensitive_data` defaults to `False`
+(`observability.py:1108`), and every content emission is gated behind the derived
+`SENSITIVE_DATA_ENABLED` property (`observability.py:1203`) — message capture at
+`observability.py:2010/2141/2186/2352/2490`, and tool arguments/results in `_tools.py:761/777/791`.
+
+`enable_instrumentation`, by contrast, *does* default to `True` (`observability.py:1107`), which
+is why spans appeared at all and masked the missing half. The pre-existing comment in
+`telemetry.py` asserting that agent_framework instrumentation is "enabled by default" was
+therefore true but incomplete, and read as if nothing further was required.
+
+`OBSERVABILITY_SETTINGS` is an eager module-level singleton (`observability.py:1477`)
+constructed when `agent_framework` is first imported, so the setting can only be supplied from
+the environment before process start — never from Python afterwards.
+
+### Definition of Done
+
+- A turn replayed against the rebuilt bridge produces Phoenix spans containing the prompt text.
+- Those spans expose `llm.input_messages.*` / `llm.output_messages.*`, the attributes Phoenix's
+  message panes render (not merely the raw `gen_ai.*` attributes).
+- An `execute_tool run_local_command` span carries both the command and its output.
+- Running without content capture logs a warning instead of silently exporting empty spans.
+
+### Resolution via WBS
+
+1. Set `ENABLE_SENSITIVE_DATA=true` (overridable) in the compose bridge service, documenting why
+   it must be disabled for any non-local collector. Warn from `configure_telemetry()` when
+   content capture is off. Commit: `fix(bridge): export agent message content to Phoenix`.
+
+### Specific change surface
+
+- `opecode-sprints/remote-maf-handoff-agents/docker-compose.yml` — `ENABLE_SENSITIVE_DATA`
+  env var on the `bridge` service.
+- `test/remote-maf-handoff-agents/app/telemetry.py` — module docstring documents the two
+  switches; `configure_telemetry()` reads `OBSERVABILITY_SETTINGS.SENSITIVE_DATA_ENABLED` after
+  installing the provider and warns when it is off.
+- `opecode-sprints/remote-maf-handoff-agents/VERIFY.md` — "Phoenix shows traces but empty
+  messages" troubleshooting section.
+
+### Verified
+
+Queried Phoenix's GraphQL API directly after rebuilding the container and replaying a turn:
+
+- 4 spans contain the probe prompt text (previously 0).
+- The `chat gpt-4o-mini` LLM span exposes `llm.input_messages.0.message.content`,
+  `llm.output_messages.0.message.tool_calls`, and `input.value`/`output.value`.
+- `execute_tool run_local_command` carries `input.value` = `{"command": "cat marker.txt"}` and
+  `output.value` = the command's real output.
+- 7 bridge tests still pass.
+
+### Security note
+
+Content capture exports raw conversation text, including anything an agent reads out of the
+local workspace via `run_local_command`. It is defaulted on because this PoC's collector is a
+Phoenix on localhost; set `ENABLE_SENSITIVE_DATA=false` before pointing
+`PHOENIX_COLLECTOR_ENDPOINT` at any shared or hosted backend.
