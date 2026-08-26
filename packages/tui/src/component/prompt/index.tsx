@@ -974,8 +974,15 @@ export function Prompt(props: PromptProps) {
 
     const workspaceSession = props.sessionID ? sync.session.get(props.sessionID) : undefined
     const workspaceID = workspaceSession?.workspaceID
+    // A remote-agent binding stores a `remote:<server>:<orchestrator>` sentinel in workspaceID
+    // rather than a real workspace, and is deliberately kept out of the workspace registry
+    // server-side. Without this guard `status()` returns undefined for it, which reads as an
+    // unavailable workspace and pushes the user into the restore flow — whose "use the local
+    // project" branch warps the session to workspaceID null, silently undoing the remote
+    // agent selection.
+    const remote = parseRemoteWorkspaceID(workspaceID)
     const workspaceStatus = workspaceID ? (project.workspace.status(workspaceID) ?? "error") : undefined
-    if (props.sessionID && workspaceID && workspaceStatus !== "connected") {
+    if (!remote && props.sessionID && workspaceID && workspaceStatus !== "connected") {
       dialog.replace(() => (
         <DialogWorkspaceUnavailable
           onRestore={() => {
