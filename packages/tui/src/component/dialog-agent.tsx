@@ -1,11 +1,13 @@
 import { createMemo, createResource } from "solid-js"
 import { useLocal } from "../context/local"
 import { useSDK } from "../context/sdk"
+import { useSync } from "../context/sync"
 import { useRoute } from "../context/route"
 import { useToast } from "../ui/toast"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 import { errorMessage } from "../util/error"
+import { parseRemoteWorkspaceID } from "../util/remote-agent"
 
 type AgentOption =
   | { type: "local"; name: string }
@@ -14,6 +16,7 @@ type AgentOption =
 export function DialogAgent() {
   const local = useLocal()
   const sdk = useSDK()
+  const sync = useSync()
   const route = useRoute()
   const dialog = useDialog()
   const toast = useToast()
@@ -48,13 +51,31 @@ export function DialogAgent() {
     return [...local_, ...remote]
   })
 
+  // Reflects the active session's remote binding (if any) so the dialog highlights the
+  // currently-selected remote orchestrator the same way it highlights a local agent. Looked up
+  // against `options()` (not synthesized directly) so it deep-equals the matching option's
+  // value exactly, including `name` — required for DialogSelect's isDeepEqual highlight check.
+  const currentRemote = createMemo(() => {
+    if (route.data.type !== "session") return undefined
+    const session = sync.session.get(route.data.sessionID)
+    const parsed = parseRemoteWorkspaceID(session?.workspaceID)
+    if (!parsed) return undefined
+    return options().find(
+      (opt) =>
+        opt.value.type === "remote" &&
+        opt.value.serverID === parsed.serverID &&
+        opt.value.orchestratorID === parsed.orchestratorID,
+    )?.value
+  })
+
   return (
     <DialogSelect
       title="Select agent"
       current={
-        local.agent.current()?.name
+        currentRemote() ??
+        (local.agent.current()?.name
           ? ({ type: "local", name: local.agent.current()!.name } as AgentOption)
-          : undefined
+          : undefined)
       }
       options={options()}
       onSelect={async (option) => {
@@ -64,18 +85,29 @@ export function DialogAgent() {
           return
         }
 
-        if (route.data.type !== "session") {
-          toast.show({
-            variant: "warning",
-            message: "Start a session before selecting a remote agent",
-            duration: 3000,
-          })
-          return
+        // Remote agents bind to a Session (their handoff state lives server-side, keyed by
+        // sessionID), but the user should be able to pick one before ever sending a message —
+        // transparently create an empty session here instead of requiring one to pre-exist.
+        let sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+        if (!sessionID) {
+          const created = await sdk.client.session
+            .create({ directory: sdk.directory })
+            .catch((err) => ({ data: undefined, error: err }))
+          if (!created.data) {
+            toast.show({
+              variant: "error",
+              title: "Failed to start session",
+              message: errorMessage(created.error),
+            })
+            return
+          }
+          sessionID = created.data.id
+          route.navigate({ type: "session", sessionID })
         }
 
         const result = await sdk.client.experimental.remoteAgent
           .select({
-            sessionID: route.data.sessionID,
+            sessionID,
             serverID: option.value.serverID,
             orchestratorID: option.value.orchestratorID,
           })
