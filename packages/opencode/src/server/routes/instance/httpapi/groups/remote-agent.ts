@@ -1,0 +1,89 @@
+import { Schema } from "effect"
+import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { RemoteProtocol } from "@opencode-ai/core/session/execution/remote-protocol"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { SessionID } from "@/session/schema"
+import { Authorization } from "../middleware/authorization"
+import { InstanceContextMiddleware } from "../middleware/instance-context"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
+import { described } from "./metadata"
+
+const root = "/experimental/remote-agent"
+
+/** One configured remote agent server, with its live-fetched manifest or a fetch error message. */
+export const ServerEntry = Schema.Struct({
+  id: Schema.String,
+  url: Schema.String,
+  disabled: Schema.Boolean,
+  manifest: Schema.optional(RemoteProtocol.Manifest),
+  error: Schema.optional(Schema.String),
+}).annotate({ identifier: "RemoteAgentServerEntry" })
+
+export const SelectPayload = Schema.Struct({
+  sessionID: SessionID,
+  serverID: Schema.String,
+  orchestratorID: Schema.String,
+})
+
+export const SelectResponse = Schema.Struct({
+  sessionID: SessionID,
+  workspaceID: WorkspaceV2.ID,
+})
+
+export class RemoteAgentServerNotFoundError extends Schema.ErrorClass<RemoteAgentServerNotFoundError>(
+  "RemoteAgentServerNotFoundError",
+)(
+  {
+    name: Schema.Literal("RemoteAgentServerNotFoundError"),
+    data: Schema.Struct({ message: Schema.String }),
+  },
+  { httpApiStatus: 400 },
+) {}
+
+export const RemoteAgentPaths = {
+  list: root,
+  select: `${root}/select`,
+} as const
+
+export const RemoteAgentApi = HttpApi.make("remote-agent")
+  .add(
+    HttpApiGroup.make("remote-agent")
+      .add(
+        HttpApiEndpoint.get("list", RemoteAgentPaths.list, {
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(ServerEntry), "Configured remote agent servers with live manifests"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.remoteAgent.list",
+            summary: "List remote agent servers",
+            description:
+              "List configured remote MAF agent bridge servers, each with its live-fetched agents manifest.",
+          }),
+        ),
+        HttpApiEndpoint.post("select", RemoteAgentPaths.select, {
+          query: WorkspaceRoutingQuery,
+          payload: SelectPayload,
+          success: described(SelectResponse, "Session bound to remote agent"),
+          error: [RemoteAgentServerNotFoundError, HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.remoteAgent.select",
+            summary: "Select remote agent",
+            description: "Bind a session's Location to the selected remote orchestrator so its next turn runs there.",
+          }),
+        ),
+      )
+      .annotateMerge(
+        OpenApi.annotations({ title: "remote-agent", description: "Experimental HttpApi remote agent routes." }),
+      )
+      .middleware(InstanceContextMiddleware)
+      .middleware(WorkspaceRoutingMiddleware)
+      .middleware(Authorization),
+  )
+  .annotateMerge(
+    OpenApi.annotations({
+      title: "opencode experimental HttpApi",
+      version: "0.0.1",
+      description: "Experimental HttpApi surface for selected instance routes.",
+    }),
+  )
