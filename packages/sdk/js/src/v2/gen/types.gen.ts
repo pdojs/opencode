@@ -1921,6 +1921,7 @@ export type Config = {
         },
       ]
   >
+  remote_agent?: ConfigV2RemoteAgent
   share?: "manual" | "auto" | "disabled"
   autoshare?: boolean
   /**
@@ -3849,6 +3850,23 @@ export type ConfigV2ReferenceLocal = {
   path: string
   description?: string
   hidden?: boolean
+}
+
+export type ConfigV2RemoteAgentServer = {
+  /**
+   * Stable identifier used to address this server as remote:<id>:<orchestratorID>
+   */
+  id: string
+  /**
+   * Base HTTP(S) URL of the remote agent bridge server, e.g. http://localhost:8000
+   */
+  url: string
+  timeout?: number
+  disabled?: boolean
+}
+
+export type ConfigV2RemoteAgent = {
+  servers?: Array<ConfigV2RemoteAgentServer>
 }
 
 export type PolicyEffect = "allow" | "deny"
@@ -9533,6 +9551,41 @@ export type ExperimentalRemoteAgentSelectResponses = {
 
 export type ExperimentalRemoteAgentSelectResponse =
   ExperimentalRemoteAgentSelectResponses[keyof ExperimentalRemoteAgentSelectResponses]
+
+export type ExperimentalRemoteAgentSteerData = {
+  body?: {
+    sessionID: string
+    agentID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent/steer"
+}
+
+export type ExperimentalRemoteAgentSteerErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalRemoteAgentSteerError =
+  ExperimentalRemoteAgentSteerErrors[keyof ExperimentalRemoteAgentSteerErrors]
+
+export type ExperimentalRemoteAgentSteerResponses = {
+  /**
+   * Steer frame delivery result
+   */
+  200: {
+    delivered: boolean
+  }
+}
+
+export type ExperimentalRemoteAgentSteerResponse =
+  ExperimentalRemoteAgentSteerResponses[keyof ExperimentalRemoteAgentSteerResponses]
 
 export type SessionListData = {
   body?: never
