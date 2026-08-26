@@ -20,8 +20,10 @@ from agent_framework import (
 from agent_framework._clients import BaseChatClient
 from agent_framework._middleware import ChatMiddlewareLayer
 from agent_framework._tools import FunctionInvocationLayer
+import pytest
 from agent_framework_orchestrations import HandoffBuilder
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.orchestrator import OrchestratorSpec, make_run_local_command_tool
 from app.server import create_app
@@ -117,8 +119,8 @@ def _two_agent_handoff_spec() -> OrchestratorSpec:
     # `alpha` always hands off to `beta`; `beta` never hands off, so after its reply the
     # workflow requests the next user input (human-in-loop default) — this proves the
     # assistant_delta* -> handoff -> assistant_delta* -> turn_complete frame sequence.
-    def build(run_local_command: Any) -> Any:
-        del run_local_command
+    def build(run_local_command: Any, start_agent: str | None = None) -> Any:
+        del run_local_command, start_agent
         alpha = _mock_agent("alpha", handoff_to="beta")
         beta = _mock_agent("beta")
         return HandoffBuilder(name="demo", participants=[alpha, beta]).with_start_agent(alpha).build()
@@ -132,12 +134,17 @@ def _three_agent_spec() -> OrchestratorSpec:
     # None of the three hand off on their own; a `steer_to_agent` frame is the only thing that
     # causes a handoff, proving the advisory-nudge mechanism in isolation from any "agent
     # decided to hand off anyway" ambiguity.
-    def build(run_local_command: Any) -> Any:
+    def build(run_local_command: Any, start_agent: str | None = None) -> Any:
         del run_local_command
         alpha = _mock_agent("alpha")
         beta = _mock_agent("beta")
         gamma = _mock_agent("gamma")
-        return HandoffBuilder(name="demo3", participants=[alpha, beta, gamma]).with_start_agent(alpha).build()
+        agents = {"alpha": alpha, "beta": beta, "gamma": gamma}
+        return (
+            HandoffBuilder(name="demo3", participants=[alpha, beta, gamma])
+            .with_start_agent(agents.get(start_agent or "alpha", alpha))
+            .build()
+        )
 
     return OrchestratorSpec(
         id="demo3",
@@ -162,7 +169,10 @@ def test_manifest_shape() -> None:
                 "id": "demo",
                 "name": "Demo",
                 "description": "two-agent handoff fixture",
-                "participants": [{"id": "alpha", "name": "alpha"}, {"id": "beta", "name": "beta"}],
+                "participants": [
+                    {"id": "alpha", "name": "alpha", "description": ""},
+                    {"id": "beta", "name": "beta", "description": ""},
+                ],
             }
         ]
     }
@@ -217,8 +227,33 @@ def test_steer_to_agent_targets_participant() -> None:
         assert handoff_frame == {"type": "handoff", "source": "alpha", "target": "gamma"}
 
 
+def test_start_agent_addresses_a_participant_directly() -> None:
+    """A client can open a session on any agent in the network, not just the default start
+    agent, so `/agents` can list and address every participant individually."""
+    app = create_app(orchestrators=[_three_agent_spec()])
+    client = TestClient(app)
+
+    with client.websocket_connect("/agents/demo3/session?start_agent=gamma") as ws:
+        ws.send_json({"type": "user_message", "text": "hello"})
+        frames = _drain_until_turn_complete(ws)
+        assert [f["type"] for f in frames] == ["assistant_delta", "turn_complete"]
+        # Without start_agent this would be "alpha" (see test_steer_to_agent_targets_participant).
+        assert frames[0]["agent_id"] == "gamma"
+
+
+def test_unknown_start_agent_is_rejected() -> None:
+    app = create_app(orchestrators=[_three_agent_spec()])
+    client = TestClient(app)
+
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect("/agents/demo3/session?start_agent=nobody") as ws:
+            ws.receive_json()
+    assert excinfo.value.code == 4404
+
+
 def test_tool_call_bridge_round_trip() -> None:
-    def build(run_local_command: Any) -> Any:
+    def build(run_local_command: Any, start_agent: str | None = None) -> Any:
+        del start_agent
         agent = Agent(
             client=_ToolCallingMockChatClient(),
             name="assistant",

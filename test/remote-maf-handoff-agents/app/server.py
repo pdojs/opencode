@@ -54,10 +54,16 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
         return Manifest(orchestrators=[spec.manifest_entry() for spec in registry.values()])
 
     @app.websocket("/agents/{orchestrator_id}/session")
-    async def session(websocket: WebSocket, orchestrator_id: str) -> None:
+    async def session(websocket: WebSocket, orchestrator_id: str, start_agent: str | None = None) -> None:
         spec = registry.get(orchestrator_id)
         if spec is None:
             await websocket.close(code=4404, reason=f"unknown orchestrator '{orchestrator_id}'")
+            return
+        # `start_agent` lets a client address any participant in the network directly instead of
+        # always entering through the orchestrator's default start agent. Handoffs still work
+        # normally from wherever the conversation starts.
+        if start_agent is not None and start_agent not in spec.participant_ids:
+            await websocket.close(code=4404, reason=f"unknown participant '{start_agent}' in '{orchestrator_id}'")
             return
 
         await websocket.accept()
@@ -80,7 +86,7 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
             finally:
                 pending_tool_calls.pop(call_id, None)
 
-        workflow = spec.build(run_local_command)
+        workflow = spec.build(run_local_command, start_agent)
 
         async def read_frames() -> None:
             try:

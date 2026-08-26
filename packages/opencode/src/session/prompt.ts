@@ -1189,18 +1189,19 @@ const layer = Layer.effect(
           const remote = SessionRunnerRemote.isRemoteWorkspaceID(session.workspaceID)
             ? SessionRunnerRemote.parseRemoteWorkspaceID(session.workspaceID)
             : undefined
+          const remoteLabel = remote ? (remote.participantID ?? remote.orchestratorID) : undefined
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
             parentID: lastUser.id,
             role: "assistant",
-            mode: remote?.orchestratorID ?? agent.name,
-            agent: remote?.orchestratorID ?? agent.name,
+            mode: remoteLabel ?? agent.name,
+            agent: remoteLabel ?? agent.name,
             variant: lastUser.model.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            modelID: remote ? ModelV2.ID.make(remote.orchestratorID) : model.id,
+            modelID: remoteLabel ? ModelV2.ID.make(remoteLabel) : model.id,
             providerID: remote ? ProviderV2.ID.make("remote-agent") : model.providerID,
             time: { created: Date.now() },
             sessionID,

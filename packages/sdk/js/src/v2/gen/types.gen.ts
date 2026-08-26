@@ -3890,6 +3890,7 @@ export type PtyTicketConnectToken = {
 export type RemoteProtocolParticipant = {
   id: string
   name: string
+  description?: string
 }
 
 export type RemoteProtocolOrchestratorManifestEntry = {
@@ -9520,6 +9521,7 @@ export type ExperimentalRemoteAgentSelectData = {
     sessionID: string
     serverID: string
     orchestratorID: string
+    participantID?: string
   }
   path?: never
   query?: {

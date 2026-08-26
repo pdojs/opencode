@@ -26,14 +26,14 @@ const WORKSPACE_ID_PREFIX = "remote:"
 export const isRemoteWorkspaceID = (workspaceID: string | undefined): workspaceID is string =>
   workspaceID !== undefined && workspaceID.startsWith(WORKSPACE_ID_PREFIX)
 
-export const remoteWorkspaceID = (serverID: string, orchestratorID: string) =>
-  `${WORKSPACE_ID_PREFIX}${serverID}:${orchestratorID}`
+export const remoteWorkspaceID = (serverID: string, orchestratorID: string, participantID?: string) =>
+  [WORKSPACE_ID_PREFIX + serverID, orchestratorID, participantID].filter((part) => part !== undefined).join(":")
 
 export const parseRemoteWorkspaceID = (workspaceID: string) => {
-  const rest = workspaceID.slice(WORKSPACE_ID_PREFIX.length)
-  const separator = rest.indexOf(":")
-  if (separator < 0) return undefined
-  return { serverID: rest.slice(0, separator), orchestratorID: rest.slice(separator + 1) }
+  const parts = workspaceID.slice(WORKSPACE_ID_PREFIX.length).split(":")
+  if (parts.length < 2 || parts.length > 3) return undefined
+  if (parts.some((part) => part === "")) return undefined
+  return { serverID: parts[0]!, orchestratorID: parts[1]!, participantID: parts[2] as string | undefined }
 }
 
 /** Finds the newest user-authored turn text in already-recorded history, for sending to the remote agent. */
@@ -46,8 +46,9 @@ const findLatestUserText = (entries: ReadonlyArray<{ readonly message: { type: s
   return undefined
 }
 
-const toWebSocketURL = (baseURL: string, orchestratorID: string) =>
-  `${baseURL.replace(/^http/, "ws").replace(/\/$/, "")}/agents/${orchestratorID}/session`
+const toWebSocketURL = (baseURL: string, orchestratorID: string, participantID?: string) =>
+  `${baseURL.replace(/^http/, "ws").replace(/\/$/, "")}/agents/${orchestratorID}/session` +
+  (participantID ? `?start_agent=${encodeURIComponent(participantID)}` : "")
 
 /**
  * One long-lived WS connection per Session, held for the Location's lifetime so the remote
@@ -167,7 +168,7 @@ const connect = (url: string) =>
  * the same Location ref, but callers of `steerToAgent` (WS4's UI action) don't hold a reference
  * to that Location's layer closure.
  */
-const connections = new Map<SessionSchema.ID, RemoteConnection>()
+const connections = new Map<SessionSchema.ID, { readonly url: string; readonly connection: RemoteConnection }>()
 
 export type Connection = RemoteConnection
 
@@ -180,19 +181,27 @@ export const openConnection = Effect.fn("SessionRunner.remote.openConnection")(f
   sessionID: SessionSchema.ID,
   orchestratorID: string,
   baseURL: string,
+  participantID?: string,
 ) {
+  const url = toWebSocketURL(baseURL, orchestratorID, participantID)
   const existing = connections.get(sessionID)
-  if (existing) return existing
-  const connection = yield* connect(toWebSocketURL(baseURL, orchestratorID))
-  connections.set(sessionID, connection)
+  // A rebind to a different orchestrator or participant needs a fresh workflow instance; the
+  // start agent is fixed for the lifetime of the bridge-side connection.
+  if (existing && existing.url === url) return existing.connection
+  if (existing) {
+    existing.connection.close("rebound to a different remote agent")
+    connections.delete(sessionID)
+  }
+  const connection = yield* connect(url)
+  connections.set(sessionID, { url, connection })
   return connection
 })
 
 export const closeConnection = (sessionID: SessionSchema.ID, reason: string) =>
   Effect.sync(() => {
-    const connection = connections.get(sessionID)
-    if (!connection) return
-    connection.close(reason)
+    const existing = connections.get(sessionID)
+    if (!existing) return
+    existing.connection.close(reason)
     connections.delete(sessionID)
   })
 
@@ -225,7 +234,7 @@ export const serverURLFromConfig = Effect.fn("SessionRunner.remote.serverURLFrom
  * idle connection would strand those frames and corrupt the next prompt's stream.
  */
 export const steerToAgent = (sessionID: SessionSchema.ID, agentID: string) =>
-  Effect.sync(() => connections.get(sessionID)?.steer(agentID) ?? false)
+  Effect.sync(() => connections.get(sessionID)?.connection.steer(agentID) ?? false)
 
 const layer = Layer.effect(
   Service,
@@ -255,8 +264,9 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       serverID: string,
       orchestratorID: string,
+      participantID: string | undefined,
     ) {
-      return yield* openConnection(sessionID, orchestratorID, yield* resolveServerURL(serverID))
+      return yield* openConnection(sessionID, orchestratorID, yield* resolveServerURL(serverID), participantID)
     })
 
     /** Bridges one remote turn's frames into the same SessionEvent stream the local runner emits. */
@@ -375,7 +385,12 @@ const layer = Layer.effect(
       const text = findLatestUserText(entries)
       if (text === undefined) return
 
-      const connection = yield* connectionFor(input.sessionID, target.serverID, target.orchestratorID)
+      const connection = yield* connectionFor(
+        input.sessionID,
+        target.serverID,
+        target.orchestratorID,
+        target.participantID,
+      )
       yield* runTurn(input.sessionID, target.orchestratorID, connection, text).pipe(
         Effect.onInterrupt(() =>
           Effect.sync(() => {

@@ -11,6 +11,7 @@ import type { Tool } from "ai";
 export type Target = {
   readonly serverID: string;
   readonly orchestratorID: string;
+  readonly participantID?: string;
 };
 
 /**
@@ -34,6 +35,7 @@ export const stream = (input: {
         SessionSchema.ID.make(input.sessionID),
         input.target.orchestratorID,
         input.baseURL,
+        input.target.participantID,
       ).pipe(Effect.mapError((error) => new Error(error.message)));
 
       connection.beginTurn();
