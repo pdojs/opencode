@@ -168,6 +168,22 @@ Deviations from the original plan, made explicitly when implementation started:
   currently speaking" live handoff-status badge in the session view — WS2's inline-text handoff
   notices (`↪ handoff: source → target`, rendered as ordinary assistant text) already satisfy the
   DoD's "who's speaking" requirement without a dedicated status component; a follow-up can add a
-  persistent badge if inline text proves insufficient during WS5's demo.
+  persistent badge if inline text proves insufficient during WS5's demo. Merged: PR #5
+  (`story/agent-picker-ui` -> `feature/remote-maf-handoff-agents`, squash), 4 commits (routes,
+  sdk regen, TUI dialog, docs).
+- **Post-WS4 architecture confirmation**: in response to a design question about aligning with
+  Azure API Center's agent-registration model, verified (with `server.py:43-61` citations) that
+  WS1-WS4 already implement the "container = agent host with a router + streaming API"
+  shape — no code change or new workstream follows. Documented in `design-proposal.md`. Merged:
+  PR #6 (`story/agent-service-architecture-note` -> `feature/remote-maf-handoff-agents`, squash,
+  docs-only).
+- **Merge-strategy note** (in response to a user question about squash commit size): each
+  `story/*` -> `feature/remote-maf-handoff-agents` merge uses `gh pr merge --squash
+  --delete-branch=false` deliberately, per this repo's own commit-discipline convention
+  ("squashing is reserved for merge-to-feature (at the PR gate), not for work within the dev
+  branch"). Granular, individually-buildable commits live on the retained `story/*` branches
+  (not deleted); `feature/remote-maf-handoff-agents`'s history is one clean, already-tested
+  commit per workstream (WS1-WS4 + the doc addendum = 5 commits total so far). `feature/... ` is
+  **not yet merged into `dev`** — that happens once WS5 lands, as one final epic-level PR.
 - **Next**: WS5 (`compose-dev-env`) — docker-compose for the bridge container + Phoenix, and the
   manual end-to-end verification doc.
