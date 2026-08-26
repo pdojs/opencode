@@ -138,3 +138,36 @@ Deviations from the original plan, made explicitly when implementation started:
   compose-based demo or a dedicated follow-up integration test.
 - **Next**: WS4 (`agent-picker-ui`) — TUI `/agent` alias, Native/Workspace/Remote grouped picker
   sections, remote-selection binding, and the handoff/participant-status indicator.
+- **WS4 status**: implemented on `story/agent-picker-ui`
+  (PR: `feature/remote-maf-handoff-agents` <- `story/agent-picker-ui`). Adds `slashAliases:
+  ["agent"]` to the existing `agent.list` command in `packages/tui/src/app.tsx` (per Decision #4:
+  `/agent` opens the same `<DialogAgent />` dialog as `/agents`, no second dialog implementation).
+  A new experimental HttpApi group (`packages/opencode/src/server/routes/instance/httpapi/groups
+  /remote-agent.ts` + `handlers/remote-agent.ts`, wired into `InstanceHttpApi`/`server.ts`)
+  exposes `GET /experimental/remote-agent` (lists configured `remote_agent.servers`, each with its
+  live-fetched manifest or a per-server fetch-error string via `RemoteAgentManifest.fetchManifest`)
+  and `POST /experimental/remote-agent/select` (binds `sessionID` to
+  `remote:<serverID>:<orchestratorID>` via `Session.Service.setWorkspace`, reusing WS2's
+  `SessionRunnerRemote.remoteWorkspaceID`). `dialog-agent.tsx` now renders three `DialogSelect`
+  categories — "Native" (`item.native`), "Workspace" (config/`.md`-defined local agents), and
+  "Remote" (one entry per orchestrator across all configured servers) — satisfying the visual
+  native/workspace/remote separation the user asked for, using `DialogSelect`'s existing
+  `category` grouping (no new grouping primitive built). Selecting a remote entry calls the new
+  `select` endpoint and shows a toast on failure instead of silently no-op'ing.
+  `bun run generate` (packages/client) confirmed the experimental HttpApi surface is intentionally
+  excluded from that codegen (same as `workspace`/`mcp`); the actual typed client surface used by
+  the TUI is `packages/sdk/js` (`./script/build.ts`), regenerated to add
+  `sdk.client.experimental.remoteAgent.{list,select}`. New test:
+  `packages/opencode/test/server/httpapi-remote-agent.test.ts` (2 tests: manifest-fetch-error
+  surfacing through `list`, `RemoteAgentServerNotFoundError` 400 through `select`). `bun run
+  typecheck` clean across `core`, `opencode`, `tui`, and `sdk/js`. Full `packages/opencode` suite:
+  3309/3341 passing; the 9 failures are pre-existing/environmental (bare-repo git tests fail on
+  this machine's `safe.bareRepository` git config, Vertex/Mistral/midstream-retry/SSE tests are
+  flaky under full-suite ordering — reproduced failing before this branch's changes and passing
+  again in isolation), none touch remote-agent code. **Deferred from this pass**: the "who's
+  currently speaking" live handoff-status badge in the session view — WS2's inline-text handoff
+  notices (`↪ handoff: source → target`, rendered as ordinary assistant text) already satisfy the
+  DoD's "who's speaking" requirement without a dedicated status component; a follow-up can add a
+  persistent badge if inline text proves insufficient during WS5's demo.
+- **Next**: WS5 (`compose-dev-env`) — docker-compose for the bridge container + Phoenix, and the
+  manual end-to-end verification doc.
