@@ -21,6 +21,8 @@ from agent_framework._clients import BaseChatClient
 from agent_framework._middleware import ChatMiddlewareLayer
 from agent_framework._tools import FunctionInvocationLayer
 import pytest
+from dataclasses import replace
+
 from agent_framework_orchestrations import HandoffBuilder
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -169,6 +171,10 @@ def test_manifest_shape() -> None:
                 "id": "demo",
                 "name": "Demo",
                 "description": "two-agent handoff fixture",
+                "pattern": "handoff",
+                "context_scope": "shared",
+                "multi_turn": True,
+                "addressable": True,
                 "participants": [
                     {"id": "alpha", "name": "alpha", "description": ""},
                     {"id": "beta", "name": "beta", "description": ""},
@@ -249,6 +255,45 @@ def test_unknown_start_agent_is_rejected() -> None:
         with client.websocket_connect("/agents/demo3/session?start_agent=nobody") as ws:
             ws.receive_json()
     assert excinfo.value.code == 4404
+
+
+def test_non_addressable_pattern_refuses_start_agent() -> None:
+    """Group chat, magentic, sequential and concurrent workflows decide internally who speaks,
+    so a client cannot address a participant. Refusing loudly beats silently ignoring the
+    request and letting the client believe it reached the agent it named.
+    """
+    spec = replace(_three_agent_spec(), id="chat", pattern="group_chat")
+    client = TestClient(create_app(orchestrators=[spec]))
+
+    # The participant exists; it is the pattern that makes it unaddressable.
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect("/agents/chat/session?start_agent=gamma") as ws:
+            ws.receive_json()
+    assert excinfo.value.code == 4400
+
+    # ...and the same orchestrator still accepts a plain, unaddressed session.
+    with client.websocket_connect("/agents/chat/session") as ws:
+        ws.send_json({"type": "user_message", "text": "hello"})
+        assert [f["type"] for f in _drain_until_turn_complete(ws)] == ["assistant_delta", "turn_complete"]
+
+
+def test_manifest_advertises_pattern_semantics() -> None:
+    """A client needs the pattern's interaction semantics to model a session correctly: a
+    single-shot pattern must not be presented as a continuous conversation.
+    """
+    specs = [
+        replace(_two_agent_handoff_spec(), id="h", pattern="handoff"),
+        replace(_two_agent_handoff_spec(), id="c", pattern="concurrent"),
+        replace(_two_agent_handoff_spec(), id="s", pattern="sequential", context_scope_override="scoped"),
+    ]
+    body = TestClient(create_app(orchestrators=specs)).get("/agents/manifest").json()
+    got = {o["id"]: (o["pattern"], o["context_scope"], o["multi_turn"], o["addressable"]) for o in body["orchestrators"]}
+
+    assert got["h"] == ("handoff", "shared", True, True)
+    # Concurrent fans the same user input out to every agent and none of them see each other.
+    assert got["c"] == ("concurrent", "isolated", False, False)
+    # Sequential defaults to forwarding the whole conversation; this one was built to narrow it.
+    assert got["s"] == ("sequential", "scoped", False, False)
 
 
 def test_tool_call_bridge_round_trip() -> None:
