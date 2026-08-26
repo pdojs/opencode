@@ -55,7 +55,6 @@ const toWebSocketURL = (baseURL: string, orchestratorID: string) =>
 class RemoteConnection {
   private queue: Array<RemoteProtocol.ServerFrame | { readonly closed: true }> = []
   private waiters: Array<() => void> = []
-  private onClose?: () => void
 
   constructor(private readonly socket: WebSocket) {
     socket.addEventListener("message", (event) => {
@@ -93,7 +92,6 @@ class RemoteConnection {
   }
 
   close(reason: string) {
-    this.onClose?.()
     try {
       this.socket.close(1000, reason)
     } catch {
@@ -118,6 +116,29 @@ const connect = (url: string) =>
     socket.addEventListener("error", onError, { once: true })
   })
 
+/**
+ * Module-level (not Location-scoped) so `steerToAgent` below can reach a Session's open
+ * connection regardless of which Location instance created it — a Session always resolves to
+ * the same Location ref, but callers of `steerToAgent` (WS4's UI action) don't hold a reference
+ * to that Location's layer closure.
+ */
+const connections = new Map<SessionSchema.ID, RemoteConnection>()
+
+/**
+ * Best-effort nudge asking the remote orchestrator's active participant to hand off to
+ * `agentID`. Advisory only, per WS1's `SteerToAgentFrame` docstring: resolves once the frame is
+ * sent, not once a handoff actually happens — the actual outcome is still observed via the
+ * normal `handoff` frame relayed as an inline text segment in `runTurn`. No-ops if the Session
+ * has no open remote connection (e.g. it hasn't sent a first turn yet, or was interrupted).
+ */
+export const steerToAgent = (sessionID: SessionSchema.ID, agentID: string) =>
+  Effect.sync(() => {
+    const connection = connections.get(sessionID)
+    if (!connection) return false
+    connection.send(RemoteProtocol.SteerToAgentFrame.make({ type: "steer_to_agent", agent_id: agentID }))
+    return true
+  })
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -126,8 +147,6 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const config = yield* Config.Service
     const db = (yield* Database.Service).db
-    /** One connection per Session, reused across turns; see RemoteConnection docstring. */
-    const connections = new Map<SessionSchema.ID, RemoteConnection>()
 
     const getSession = Effect.fn("SessionRunner.remote.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)

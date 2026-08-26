@@ -76,6 +76,38 @@ Deviations from the original plan, made explicitly when implementation started:
   (`python -m pytest tests/ -q` in `test/remote-maf-handoff-agents/`). `docker build` itself was
   not exercised (no Docker daemon in the authoring environment) — packaging was instead
   verified via a non-editable `pip install .`; re-verify `docker build` before relying on the
-  image for Layer 4 manual demos.
-- **Next**: WS2 (`remote-location-runner`) is the next story branch, consuming WS1's wire
-  protocol from `test/remote-maf-handoff-agents/app/protocol.py`.
+  image for Layer 4 manual demos. **Merged (squash) into `feature/remote-maf-handoff-agents`.**
+- **WS2 location deviation**: `RemoteLocationRunner` lives at
+  `packages/core/src/session/runner/remote.ts`, not `packages/core/src/session/execution/remote.ts`
+  as originally planned. The actual (post-V2-refactor) architecture already routes *all*
+  Location-scoped runner resolution generically through `execution/local.ts`'s coordinator +
+  `LocationServiceMap.get(session.location)` — there is only ever one `SessionExecution.Service`
+  implementation regardless of runner type, so no second execution-layer file was needed. The
+  new runner satisfies `SessionRunner.Interface` directly and is swapped in via
+  `buildLocationServiceMap`'s existing `replacements` mechanism in `location-services.ts`,
+  keyed on a `remote:<serverID>:<orchestratorID>` `workspaceID` prefix.
+- **WS2 status**: implemented on `story/remote-location-runner`
+  (PR: `feature/remote-maf-handoff-agents` <- `story/remote-location-runner`, 6 commits — config
+  schema, protocol mirror, runner, LocationServiceMap wiring, manifest client, decode-`Option`
+  bugfix, `steerToAgent`). 16 new tests passing (`remote-protocol.test.ts`,
+  `session-runner-remote.test.ts`, `remote-agent-manifest.test.ts`); full `packages/core` suite
+  at 1104/1112 (remaining 8 failures are pre-existing Mistral/xAI/Groq reasoning-effort tests,
+  confirmed present before this branch's changes). `bun run typecheck` clean. `steerToAgent`
+  (Decision #7 in `requirements.md`/`design-proposal.md`) is implemented as a module-level
+  export (not a `Service` method) backed by a module-scoped `Map<SessionID, RemoteConnection>` —
+  this lets WS4's future participant-picker action call it directly without needing to resolve
+  the Location's Effect layer first; it sends the `steer_to_agent` frame on the Session's
+  already-open chat WS and no-ops (`false`) if no connection is open yet. Known simplifications
+  carried into WS3/WS4: handoff notices render as inline text (no dedicated `EventV2` variant
+  yet), remote tool calls get a stubbed error `tool_result` (WS3's job to actually bridge them),
+  and interrupting a remote turn closes its WS connection outright (MAF's workflow has no
+  resume-by-id API, so the next turn starts a fresh remote conversation instead of resuming the
+  interrupted one). **Deferred from the original WS2 WBS step 2**: a fake in-process WS server
+  test helper (`packages/core/test/lib/remote-agent-server.ts`) modeled on
+  `packages/opencode/test/lib/llm-server.ts` was not built this pass — WS2's tests instead cover
+  protocol encode/decode, workspace-ID parsing, the manifest HTTP client, and `steerToAgent`'s
+  no-connection no-op path in isolation, without a live WS integration test of `runTurn`/`run`
+  end-to-end. This gap is deferred to WS5's compose-based e2e demo, or a follow-up integration
+  test if higher confidence is needed before then.
+- **Next**: WS3 (`remote-tool-bridge`) — replace WS2's tool-call stub with real local execution
+  through the existing `ToolRegistry`/permission path.

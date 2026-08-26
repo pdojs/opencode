@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { SessionRunnerRemote } from "@opencode-ai/core/session/runner/remote"
 
 describe("SessionRunnerRemote workspace ID encoding", () => {
@@ -22,5 +23,14 @@ describe("SessionRunnerRemote workspace ID encoding", () => {
 
   test("returns undefined for a malformed remote workspace ID with no orchestrator segment", () => {
     expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1")).toBeUndefined()
+  })
+})
+
+describe("SessionRunnerRemote.steerToAgent", () => {
+  test("no-ops and returns false when the Session has no open remote connection", () => {
+    const result = Effect.runSync(
+      SessionRunnerRemote.steerToAgent("ses_nonexistent" as never, "support"),
+    )
+    expect(result).toBe(false)
   })
 })
