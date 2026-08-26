@@ -12,7 +12,16 @@ import { DialogRemoteSession } from "./dialog-remote-session"
 
 type AgentOption =
   | { type: "local"; name: string }
-  | { type: "remote"; serverID: string; orchestratorID: string; participantID?: string; name: string }
+  | {
+      type: "remote"
+      serverID: string
+      orchestratorID: string
+      participantID?: string
+      name: string
+      // Talks to this participant alone, outside the orchestrator's workflow, on its own
+      // transcript — as opposed to entering the shared network conversation at that agent.
+      solo?: boolean
+    }
 
 export function DialogAgent() {
   const local = useLocal()
@@ -66,6 +75,22 @@ export function DialogAgent() {
           description: participant.description || `remote · ${orchestrator.name}`,
           category: `Remote · ${orchestrator.name}`,
         })),
+        // The same agents again, but privately: the network conversation is shared, so anything
+        // said to one agent there is visible to the others. A solo entry is the way to say
+        // something to just one of them.
+        ...(orchestrator.addressable === false ? [] : (orchestrator.participants ?? [])).map((participant) => ({
+          value: {
+            type: "remote",
+            serverID: server.id,
+            orchestratorID: orchestrator.id,
+            participantID: participant.id,
+            name: participant.name,
+            solo: true,
+          } as AgentOption,
+          title: `${participant.name} (private)`,
+          description: `talk to ${participant.name} alone — no handoffs, separate conversation`,
+          category: `Remote · ${orchestrator.name} · Private`,
+        })),
       ]),
     )
 
@@ -93,7 +118,8 @@ export function DialogAgent() {
         opt.value.type === "remote" &&
         opt.value.serverID === parsed.serverID &&
         opt.value.orchestratorID === parsed.orchestratorID &&
-        opt.value.participantID === parsed.participantID,
+        opt.value.participantID === parsed.participantID &&
+        (opt.value.solo ?? false) === parsed.solo,
     )?.value
   })
 
@@ -145,6 +171,7 @@ export function DialogAgent() {
               serverID={remote.serverID}
               orchestratorID={remote.orchestratorID}
               participantID={remote.participantID}
+              solo={remote.solo}
               name={option.title}
             />
           ))
@@ -157,6 +184,7 @@ export function DialogAgent() {
             serverID: option.value.serverID,
             orchestratorID: option.value.orchestratorID,
             participantID: option.value.participantID,
+            solo: option.value.solo,
           })
           .catch((err) => ({ data: undefined, error: err }))
 

@@ -56,10 +56,14 @@ services:
       # Never enable it against a shared or hosted backend.
       - ENABLE_SENSITIVE_DATA=${ENABLE_SENSITIVE_DATA:-false}
       - MAF_CHECKPOINT_DIR=/data/checkpoints
+      - MAF_SESSION_DIR=/data/sessions
     volumes:
       # Conversation checkpoints, so rejoining a session works across a container restart and
       # not just across a reconnect.
       - bridge-checkpoints:/data/checkpoints
+      # Solo (single-agent) conversations, which persist an AgentSession rather than a workflow
+      # checkpoint.
+      - bridge-sessions:/data/sessions
     depends_on:
       - phoenix
     healthcheck:
@@ -76,3 +80,4 @@ services:
 
 volumes:
   bridge-checkpoints:
+  bridge-sessions:

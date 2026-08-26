@@ -12,6 +12,8 @@ export type Target = {
   readonly serverID: string;
   readonly orchestratorID: string;
   readonly participantID?: string;
+  /** A private conversation with `participantID` alone, outside the orchestrator's workflow. */
+  readonly solo?: boolean;
 };
 
 /**
@@ -36,6 +38,7 @@ export const stream = (input: {
         input.target.orchestratorID,
         input.baseURL,
         input.target.participantID,
+        input.target.solo,
       ).pipe(Effect.mapError((error) => new Error(error.message)));
 
       connection.beginTurn();

@@ -7,6 +7,7 @@ describe("util.remoteAgent", () => {
       serverID: "demo-bridge",
       orchestratorID: "support",
       participantID: undefined,
+      solo: false,
     })
   })
 
@@ -15,6 +16,16 @@ describe("util.remoteAgent", () => {
       serverID: "demo-bridge",
       orchestratorID: "support",
       participantID: "refunds",
+      solo: false,
+    })
+  })
+
+  test("parses the solo segment marking a private conversation with one agent", () => {
+    expect(parseRemoteWorkspaceID("remote:demo-bridge:support:refunds:solo")).toEqual({
+      serverID: "demo-bridge",
+      orchestratorID: "support",
+      participantID: "refunds",
+      solo: true,
     })
   })
 
@@ -26,7 +37,9 @@ describe("util.remoteAgent", () => {
     expect(parseRemoteWorkspaceID("remote:demo-bridge")).toBeUndefined()
     expect(parseRemoteWorkspaceID("remote::support")).toBeUndefined()
     expect(parseRemoteWorkspaceID("remote:demo-bridge:support:")).toBeUndefined()
+    // A 4th segment is only meaningful as the solo marker.
     expect(parseRemoteWorkspaceID("remote:demo-bridge:support:refunds:extra")).toBeUndefined()
+    expect(parseRemoteWorkspaceID("remote:demo-bridge:support:refunds:solo:extra")).toBeUndefined()
   })
 
   /**

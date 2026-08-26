@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterable
 
-from agent_framework import AgentResponse, AgentResponseUpdate, WorkflowEvent
+from agent_framework import AgentResponse, AgentResponseUpdate, AgentSession, WorkflowEvent
 from agent_framework.orchestrations import HandoffAgentUserRequest, HandoffSentEvent
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
@@ -22,7 +22,7 @@ from pydantic import TypeAdapter, ValidationError
 from opentelemetry import trace
 
 from .orchestrator import PATTERN_SEMANTICS, OrchestratorSpec, default_orchestrators
-from . import checkpoints
+from . import checkpoints, sessions
 from .protocol import (
     AssistantDeltaFrame,
     ClientFrame,
@@ -66,6 +66,7 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
         orchestrator_id: str,
         start_agent: str | None = None,
         session_id: str | None = None,
+        solo: bool = False,
     ) -> None:
         spec = registry.get(orchestrator_id)
         if spec is None:
@@ -86,6 +87,14 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
                 code=4400,
                 reason=f"'{orchestrator_id}' is a {spec.pattern} workflow; its participants are not directly addressable",
             )
+            return
+        # A solo session is a conversation with one named agent and no workflow around it, so it
+        # needs to know which agent, and the orchestrator has to be able to hand one out.
+        if solo and start_agent is None:
+            await websocket.close(code=4400, reason="a solo session must name a participant via start_agent")
+            return
+        if solo and spec.build_agent is None:
+            await websocket.close(code=4400, reason=f"'{orchestrator_id}' does not support solo sessions")
             return
 
         await websocket.accept()
@@ -108,18 +117,36 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
             finally:
                 pending_tool_calls.pop(call_id, None)
 
-        name = checkpoints.workflow_name(orchestrator_id, session_id)
-        workflow = spec.build(run_local_command, start_agent, name)
+        # A solo session skips the workflow entirely: one agent, no handoffs, and its conversation
+        # is carried by an AgentSession rather than a workflow checkpoint.
+        workflow = None
+        agent = None
+        agent_session = None
+        resume_from = None
+        resumed_solo_session = False
+        if solo:
+            agent = spec.build_agent(run_local_command, start_agent)
+            agent_session = sessions.load(orchestrator_id, start_agent, session_id)
+            resumed_solo_session = agent_session is not None
+            if agent_session is not None:
+                await websocket.send_json(
+                    SessionResumedFrame(session_id=session_id or "", checkpoint_id=agent_session.session_id).model_dump()
+                )
+            else:
+                agent_session = AgentSession(session_id=session_id or str(uuid.uuid4()))
+        else:
+            name = checkpoints.workflow_name(orchestrator_id, session_id)
+            workflow = spec.build(run_local_command, start_agent, name)
 
-        # Rejoin rather than restart. The Workflow object is per-connection, but its conversation
-        # is durable, so a reconnect carrying the same session id picks the conversation back up.
-        # Only a checkpoint taken while the workflow was idle awaiting a user turn can be
-        # continued, which is what `latest_resumable` selects for.
-        resume_from = await checkpoints.latest_resumable(name) if session_id else None
-        if resume_from:
-            await websocket.send_json(
-                SessionResumedFrame(session_id=session_id or "", checkpoint_id=resume_from.checkpoint_id).model_dump()
-            )
+            # Rejoin rather than restart. The Workflow object is per-connection, but its
+            # conversation is durable, so a reconnect carrying the same session id picks the
+            # conversation back up. Only a checkpoint taken while the workflow was idle awaiting a
+            # user turn can be continued, which is what `latest_resumable` selects for.
+            resume_from = await checkpoints.latest_resumable(name) if session_id else None
+            if resume_from:
+                await websocket.send_json(
+                    SessionResumedFrame(session_id=session_id or "", checkpoint_id=resume_from.checkpoint_id).model_dump()
+                )
 
         async def read_frames() -> None:
             try:
@@ -154,6 +181,27 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
                 if text is None:
                     break
                 resumed_this_turn = pending_request_id is None and resume_from is not None
+                if solo:
+                    # No workflow to drive, so the turn is just this one agent answering with its
+                    # own conversation attached. Nothing else observes it.
+                    with _tracer.start_as_current_span(f"turn {orchestrator_id}/{start_agent} (solo)") as span:
+                        span.set_attribute("maf.orchestrator.id", orchestrator_id)
+                        span.set_attribute("maf.orchestrator.pattern", spec.pattern)
+                        span.set_attribute("maf.start_agent", start_agent or "")
+                        span.set_attribute("maf.session.solo", True)
+                        if session_id:
+                            span.set_attribute("session.id", session_id)
+                        span.set_attribute("maf.session.resumed", resumed_solo_session)
+                        span.set_attribute("maf.agents.engaged", [start_agent or ""])
+                        span.set_attribute("maf.agent.responding", start_agent or "")
+                        await _consume_agent_updates(
+                            agent.run(text, stream=True, session=agent_session), websocket, start_agent or ""
+                        )
+                    # Saved every turn rather than on disconnect: a dropped socket never runs a
+                    # clean shutdown, which is exactly the case rejoining has to survive.
+                    sessions.save(orchestrator_id, start_agent, session_id, agent_session)
+                    resumed_solo_session = False
+                    continue
                 if pending_request_id is not None:
                     stream = workflow.run(
                         stream=True,
@@ -251,6 +299,19 @@ async def _consume_workflow_events(
 
     await websocket.send_json(TurnCompleteFrame().model_dump())
     return pending_request_id
+
+
+async def _consume_agent_updates(stream: AsyncIterable[object], websocket: WebSocket, agent_id: str) -> None:
+    """Relay one solo agent's streamed reply. The single-agent counterpart of
+    `_consume_workflow_events`: there is no handoff or request-info event to translate, so this
+    only forwards text and closes the turn.
+    """
+
+    async for update in stream:
+        text = _extract_text(update)
+        if text:
+            await websocket.send_json(AssistantDeltaFrame(agent_id=agent_id, text=text).model_dump())
+    await websocket.send_json(TurnCompleteFrame().model_dump())
 
 
 def _extract_text(data: object) -> str:

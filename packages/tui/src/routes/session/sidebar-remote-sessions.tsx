@@ -26,9 +26,13 @@ export function SidebarRemoteSessions(props: { sessionID: string }) {
       .list()
       .filter((session) => {
         const remote = parseRemoteWorkspaceID(session.workspaceID)
-        // Participant deliberately excluded: addressing a different agent inside the same
-        // orchestrator is still the same conversation, so those share one session list.
-        return remote?.serverID === agent.serverID && remote?.orchestratorID === agent.orchestratorID
+        if (remote?.serverID !== agent.serverID || remote.orchestratorID !== agent.orchestratorID) return false
+        // A private conversation with one agent and the shared network conversation are separate
+        // transcripts, so they are listed separately.
+        if (remote.solo !== agent.solo) return false
+        // Within the shared conversation, participant is deliberately ignored: addressing a
+        // different agent is still the same conversation. A private one belongs to its agent.
+        return !remote.solo || remote.participantID === agent.participantID
       })
       .toSorted((a, b) => b.time.updated - a.time.updated)
   })
@@ -38,7 +42,10 @@ export function SidebarRemoteSessions(props: { sessionID: string }) {
       {(agent) => (
         <box>
           <text fg={theme.text}>
-            <b>Remote Sessions</b> <span style={{ fg: theme.textMuted }}>{agent().orchestratorID}</span>
+            <b>{agent().solo ? "Private Sessions" : "Remote Sessions"}</b>{" "}
+            <span style={{ fg: theme.textMuted }}>
+              {agent().solo ? agent().participantID : agent().orchestratorID}
+            </span>
           </text>
           <For each={siblings()}>
             {(session) => {

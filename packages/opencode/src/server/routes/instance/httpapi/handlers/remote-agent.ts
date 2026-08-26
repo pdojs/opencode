@@ -71,11 +71,18 @@ export const remoteAgentHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote
           })
       }
 
+      if (ctx.payload.solo && ctx.payload.participantID === undefined)
+        return yield* new RemoteAgentServerNotFoundError({
+          name: "RemoteAgentServerNotFoundError",
+          data: { message: "A solo conversation must name a participant" },
+        })
+
       const workspaceID = WorkspaceV2.ID.make(
         SessionRunnerRemote.remoteWorkspaceID(
           ctx.payload.serverID,
           ctx.payload.orchestratorID,
           ctx.payload.participantID,
+          ctx.payload.solo,
         ),
       )
       yield* session.setWorkspace({ sessionID: ctx.payload.sessionID, workspaceID })

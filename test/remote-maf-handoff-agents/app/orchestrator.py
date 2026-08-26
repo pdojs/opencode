@@ -113,6 +113,10 @@ class OrchestratorSpec:
     # workflow's own default. Lets a client address any agent in the network directly.
     # `workflow_name` namespaces this session's checkpoints; see app/checkpoints.py.
     build: Callable[[RunLocalCommand, str | None, str | None], Workflow]
+    # Builds one participant as a standalone agent for a solo session: no workflow, no handoffs,
+    # and no other agent sees the conversation. None means this orchestrator's participants can
+    # only be talked to as part of the network.
+    build_agent: Callable[[RunLocalCommand, str], object] | None = None
     # Human-readable name/description per participant id, surfaced in the manifest so a client
     # can list and address every agent in the network individually. Ids missing here fall back
     # to the id itself as the name.
@@ -163,38 +167,41 @@ def make_run_local_command_tool(run_local_command: RunLocalCommand):
     )
 
 
-def _build_sample_support_workflow(
-    run_local_command: RunLocalCommand,
-    start_agent: str | None = None,
-    workflow_name: str | None = None,
-) -> Workflow:
-    local_command_tool = make_run_local_command_tool(run_local_command)
+def _sample_support_agents(run_local_command: RunLocalCommand):
+    """The three support agents, built the same way whether they are wired into a handoff
+    workflow or addressed one-to-one in a solo session -- so a solo conversation gets an agent
+    with identical instructions and the same local-workspace tool.
+    """
 
+    local_command_tool = make_run_local_command_tool(run_local_command)
     # Defaults to a low-cost chat model for manual/demo runs (overridable via OPENAI_CHAT_MODEL)
     # — OpenAIChatClient() has no built-in default and raises SettingNotFoundError without one.
     client = OpenAIChatClient(model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
     # HandoffBuilder.build() requires every participant agent to opt in to
     # per-service-call history persistence, so that local history stays consistent
     # with the service across handoff tool-call short-circuits.
-    triage = client.as_agent(
-        instructions=_TRIAGE_INSTRUCTIONS,
-        name="triage",
-        tools=[local_command_tool],
-        require_per_service_call_history_persistence=True,
-    )
-    billing = client.as_agent(
-        instructions=_BILLING_INSTRUCTIONS,
-        name="billing",
-        tools=[local_command_tool],
-        require_per_service_call_history_persistence=True,
-    )
-    refunds = client.as_agent(
-        instructions=_REFUNDS_INSTRUCTIONS,
-        name="refunds",
-        tools=[local_command_tool],
-        require_per_service_call_history_persistence=True,
-    )
-    agents = {"triage": triage, "billing": billing, "refunds": refunds}
+    return {
+        name: client.as_agent(
+            instructions=instructions,
+            name=name,
+            tools=[local_command_tool],
+            require_per_service_call_history_persistence=True,
+        )
+        for name, instructions in (
+            ("triage", _TRIAGE_INSTRUCTIONS),
+            ("billing", _BILLING_INSTRUCTIONS),
+            ("refunds", _REFUNDS_INSTRUCTIONS),
+        )
+    }
+
+
+def _build_sample_support_workflow(
+    run_local_command: RunLocalCommand,
+    start_agent: str | None = None,
+    workflow_name: str | None = None,
+) -> Workflow:
+    agents = _sample_support_agents(run_local_command)
+    triage, billing, refunds = agents["triage"], agents["billing"], agents["refunds"]
     # The name namespaces checkpoints per session. It does not affect the graph signature that
     # restore validates against, so a workflow rebuilt for a different session still restores.
     return (
@@ -209,6 +216,10 @@ def _build_sample_support_workflow(
     )
 
 
+def _build_sample_support_agent(run_local_command: RunLocalCommand, participant_id: str):
+    return _sample_support_agents(run_local_command)[participant_id]
+
+
 SAMPLE_SUPPORT_ORCHESTRATOR = OrchestratorSpec(
     id="support",
     name="Support Triage",
@@ -220,6 +231,7 @@ SAMPLE_SUPPORT_ORCHESTRATOR = OrchestratorSpec(
         "refunds": ("Refunds", "Refund requests and refund policy"),
     },
     build=_build_sample_support_workflow,
+    build_agent=_build_sample_support_agent,
 )
 
 
