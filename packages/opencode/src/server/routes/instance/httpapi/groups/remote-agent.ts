@@ -33,6 +33,18 @@ export const SelectResponse = Schema.Struct({
   workspaceID: WorkspaceV2.ID,
 })
 
+export const ReleasePayload = Schema.Struct({
+  sessionID: SessionID,
+})
+
+export const ReleaseResponse = Schema.Struct({
+  sessionID: SessionID,
+  /** The Location the Session was returned to, or undefined for the local project. */
+  workspaceID: Schema.optional(WorkspaceV2.ID),
+  /** False when the Session was not bound to a remote orchestrator, making this a no-op. */
+  released: Schema.Boolean,
+})
+
 export const SteerPayload = Schema.Struct({
   sessionID: SessionID,
   agentID: Schema.String,
@@ -61,6 +73,7 @@ export class RemoteAgentServerNotFoundError extends Schema.ErrorClass<RemoteAgen
 export const RemoteAgentPaths = {
   list: root,
   select: `${root}/select`,
+  release: `${root}/release`,
   steer: `${root}/steer`,
 } as const
 
@@ -89,6 +102,19 @@ export const RemoteAgentApi = HttpApi.make("remote-agent")
             identifier: "experimental.remoteAgent.select",
             summary: "Select remote agent",
             description: "Bind a session's Location to the selected remote orchestrator so its next turn runs there.",
+          }),
+        ),
+        HttpApiEndpoint.post("release", RemoteAgentPaths.release, {
+          query: WorkspaceRoutingQuery,
+          payload: ReleasePayload,
+          success: described(ReleaseResponse, "Session returned to its local Location"),
+          error: [HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.remoteAgent.release",
+            summary: "Release remote agent",
+            description:
+              "Unbind a session from its remote orchestrator and return it to the local project, closing the remote connection. Ends the remote conversation: the MAF workflow lives for the lifetime of that connection and cannot be resumed.",
           }),
         ),
         HttpApiEndpoint.post("steer", RemoteAgentPaths.steer, {

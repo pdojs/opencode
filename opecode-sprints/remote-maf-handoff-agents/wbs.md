@@ -702,3 +702,93 @@ The participant redirect is advisory. MAF decides handoffs through the active ag
 call, so the bridge cannot force a specific agent to become the responder — it can only make the
 request unambiguous, which the strengthened instruction does. The same limitation already
 applies to `steer_to_agent` (WS9).
+
+---
+
+## WS13 — release a remote binding
+
+See `investigation-remote-session-lifecycle.md` for the full investigation behind this
+workstream, including the assessment of the "one TUI per remote agent" proposal.
+
+### Goal
+
+A user who picked a remote agent can pick a native agent again and get the local runner back.
+
+### Problem
+
+> Once I'm logged in to the remote agents, I can't switch back to the native build / plan agent.
+
+Selecting `build` changed the status-bar label while the session kept routing to the bridge, and
+generic workspace-resolution paths surfaced `Workspace not found: remote:demo-bridge:support` and
+a *"Workspace Unavailable — restore this session into a new workspace"* prompt.
+
+### Preliminary investigation and root cause
+
+The binding is one-way. Three facts combine:
+
+1. `handlers/remote-agent.ts:71-81` — `select` writes the `remote:` sentinel onto
+   `session.workspaceID`, and `session.ts:814-821` overwrites without retaining the old value.
+2. `groups/remote-agent.ts:76-101` — the API group exposed only `list`, `select` and `steer`.
+   **There was no unbind operation.**
+3. `dialog-agent.tsx:103-107` — picking a local agent only set the agent name and returned.
+
+Routing follows the session's Location (`prompt.ts:1190` parses `session.workspaceID`), not the
+agent label, so the session stayed remote. The sentinel is not a real registered workspace, which
+is what the workspace-resolution prompts were reacting to.
+
+The hypothesis that a terminal is tied to a live remote session is not what the code does: the
+binding is per-session (`remote.ts:213` keys connections by `SessionSchema.ID`), so a native and a
+remote session already coexist in one TUI.
+
+### Definition of Done
+
+- `POST /experimental/remote-agent/release` returns the session to the Location it had before
+  binding and closes the remote connection.
+- Picking a native agent from `/agent` on a remote-bound session restores the local runner
+  without a workspace-recovery prompt.
+- Releasing an unbound session is a no-op, not an error.
+
+### Resolution via WBS
+
+1. `feat(server): add a release endpoint for remote agent bindings` — `ReleasePayload` /
+   `ReleaseResponse`, the endpoint, and a handler that closes the socket and restores
+   `InstanceState.workspaceID` (what `Session.create` assigns at `session.ts:677/687`, making the
+   round trip symmetric).
+2. `feat(tui): release the remote binding when a native agent is picked`.
+
+### Specific change surface
+
+- `packages/opencode/src/server/routes/instance/httpapi/groups/remote-agent.ts` —
+  `ReleasePayload`, `ReleaseResponse`, `RemoteAgentPaths.release`, the endpoint.
+- `packages/opencode/src/server/routes/instance/httpapi/handlers/remote-agent.ts` — `release`,
+  registered via `.handle("release", release)`.
+- `packages/sdk/js/src/v2/gen/{sdk,types}.gen.ts` — regenerated so the TUI can call it.
+- `packages/tui/src/component/dialog-agent.tsx` — `remoteBinding()` memo; the local branch of
+  `onSelect` calls `release`.
+- `packages/opencode/test/server/httpapi-remote-agent.test.ts` — release round-trip test.
+
+### Verified
+
+Against the live bridge through a real `opencode serve`:
+
+- A fresh session has `workspaceID: null`; `select` sets `remote:demo-bridge:support:refunds`;
+  `release` returns it to exactly `null` — so no workspace-recovery prompt can fire.
+- A real remote turn ran (`providerID: remote-agent`), then `release` reported `released: true`.
+- Re-selecting and asking for the earlier invoice number returned *"I can't recall previous
+  messages"*, proving the socket was closed and the MAF workflow destroyed. (Contrast WS12, where
+  the same probe across a participant switch recalled the number.)
+- A second `release` on the same session returned `released: false`.
+- 4 remote-agent HttpApi tests pass; opencode and tui typecheck.
+
+### Deviation
+
+Release restores `InstanceState.workspaceID` rather than the exact prior workspace, because
+`select` does not retain it. These coincide for the single-workspace case this PoC targets. A
+session bound to a remote agent from a non-default workspace would return to the instance
+workspace instead.
+
+### Not done: detach and resume
+
+Requirement (C) from the investigation — close the client, log back into the remote session — is
+**not** delivered here and is not achievable by opening more TUIs. It needs bridge-side
+checkpointing keyed by `session_id`. Tracked as WS14.

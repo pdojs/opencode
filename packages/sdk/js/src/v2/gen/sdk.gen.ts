@@ -42,6 +42,8 @@ import type {
   ExperimentalProjectCopyGenerateNameResponses,
   ExperimentalRemoteAgentListErrors,
   ExperimentalRemoteAgentListResponses,
+  ExperimentalRemoteAgentReleaseErrors,
+  ExperimentalRemoteAgentReleaseResponses,
   ExperimentalRemoteAgentSelectErrors,
   ExperimentalRemoteAgentSelectResponses,
   ExperimentalRemoteAgentSteerErrors,
@@ -1045,6 +1047,47 @@ export class RemoteAgent extends HeyApiClient {
       ThrowOnError
     >({
       url: "/experimental/remote-agent/select",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Release remote agent
+   *
+   * Unbind a session from its remote orchestrator and return it to the local project, closing the remote connection. Ends the remote conversation: the MAF workflow lives for the lifetime of that connection and cannot be resumed.
+   */
+  public release<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalRemoteAgentReleaseResponses,
+      ExperimentalRemoteAgentReleaseErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent/release",
       ...options,
       ...params,
       headers: {

@@ -9558,6 +9558,42 @@ export type ExperimentalRemoteAgentSelectResponses = {
 export type ExperimentalRemoteAgentSelectResponse =
   ExperimentalRemoteAgentSelectResponses[keyof ExperimentalRemoteAgentSelectResponses]
 
+export type ExperimentalRemoteAgentReleaseData = {
+  body?: {
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent/release"
+}
+
+export type ExperimentalRemoteAgentReleaseErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalRemoteAgentReleaseError =
+  ExperimentalRemoteAgentReleaseErrors[keyof ExperimentalRemoteAgentReleaseErrors]
+
+export type ExperimentalRemoteAgentReleaseResponses = {
+  /**
+   * Session returned to its local Location
+   */
+  200: {
+    sessionID: string
+    workspaceID?: string
+    released: boolean
+  }
+}
+
+export type ExperimentalRemoteAgentReleaseResponse =
+  ExperimentalRemoteAgentReleaseResponses[keyof ExperimentalRemoteAgentReleaseResponses]
+
 export type ExperimentalRemoteAgentSteerData = {
   body?: {
     sessionID: string
