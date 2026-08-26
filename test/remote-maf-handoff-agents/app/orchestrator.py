@@ -96,9 +96,27 @@ def _build_sample_support_workflow(run_local_command: RunLocalCommand) -> Workfl
     # Defaults to a low-cost chat model for manual/demo runs (overridable via OPENAI_CHAT_MODEL)
     # — OpenAIChatClient() has no built-in default and raises SettingNotFoundError without one.
     client = OpenAIChatClient(model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
-    triage = client.as_agent(instructions=_TRIAGE_INSTRUCTIONS, name="triage", tools=[local_command_tool])
-    billing = client.as_agent(instructions=_BILLING_INSTRUCTIONS, name="billing", tools=[local_command_tool])
-    refunds = client.as_agent(instructions=_REFUNDS_INSTRUCTIONS, name="refunds", tools=[local_command_tool])
+    # HandoffBuilder.build() requires every participant agent to opt in to
+    # per-service-call history persistence, so that local history stays consistent
+    # with the service across handoff tool-call short-circuits.
+    triage = client.as_agent(
+        instructions=_TRIAGE_INSTRUCTIONS,
+        name="triage",
+        tools=[local_command_tool],
+        require_per_service_call_history_persistence=True,
+    )
+    billing = client.as_agent(
+        instructions=_BILLING_INSTRUCTIONS,
+        name="billing",
+        tools=[local_command_tool],
+        require_per_service_call_history_persistence=True,
+    )
+    refunds = client.as_agent(
+        instructions=_REFUNDS_INSTRUCTIONS,
+        name="refunds",
+        tools=[local_command_tool],
+        require_per_service_call_history_persistence=True,
+    )
     return (
         HandoffBuilder(
             name="support",
