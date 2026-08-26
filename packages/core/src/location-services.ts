@@ -25,6 +25,7 @@ import { QuestionV2 } from "./question"
 import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import * as SessionRunnerLLM from "./session/runner/llm"
+import { SessionRunnerRemote } from "./session/runner/remote"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionTodo } from "./session/todo"
 import { SkillV2 } from "./skill"
@@ -88,7 +89,16 @@ export function buildLocationServiceMap(
     LocationServiceMap.Service,
     LayerMap.make(
       (ref: Location.Ref) => {
-        const allReplacements = replacements.concat([[Location.node, Location.boundNode(ref)]])
+        // remote:<serverID>:<orchestratorID> workspaces are serviced by a MAF handoff-bridge
+        // container over WebSocket instead of a local LLM provider; swap the runner node in,
+        // not the whole graph, so every other Location-scoped service (tools, permissions,
+        // filesystem) stays identical between local and remote sessions.
+        const runnerReplacement: LayerNode.Replacements = SessionRunnerRemote.isRemoteWorkspaceID(ref.workspaceID)
+          ? [[SessionRunnerLLM.node, SessionRunnerRemote.node]]
+          : []
+        const allReplacements = replacements
+          .concat(runnerReplacement)
+          .concat([[Location.node, Location.boundNode(ref)]])
         // Apply replacements during hoist, not afterward: replacements can
         // introduce new tagged dependencies (Location.boundNode depends on
         // Project), and the hoist walk is the only pass that can still slice
