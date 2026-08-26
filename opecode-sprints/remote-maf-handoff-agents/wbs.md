@@ -204,3 +204,33 @@ Deviations from the original plan, made explicitly when implementation started:
   end-to-end; (b) the deferred `/participants` picker (WS4 follow-up) to unblock Demo 3 rows
   11/14; (c) a final `feature/remote-maf-handoff-agents` -> `dev` PR once (a)/(b) are done or
   explicitly accepted as follow-up work.
+- **Dogfooding Demo 1 surfaced 3 real runtime bugs never caught by code-only review**, since
+  none of WS1-WS4's automated tests actually exercised a live Docker daemon + a real OpenCode
+  server + a real OpenAI key together. Fixed across two PRs:
+  - PR #10 (`story/bridge-runtime-fixes`, squash): (1) `telemetry.py` imported a nonexistent
+    `AgentFrameworkInstrumentor` from `openinference-instrumentation-agent-framework` — the
+    installed package only exports `AgentFrameworkToOpenInferenceProcessor`, a `SpanProcessor`
+    subclass, not an instrumentor; fixed by registering it as the first span processor (before
+    the OTLP `BatchSpanProcessor`, since processor order matters — it mutates span attributes
+    in `on_end()` before the next processor exports them). (2) `OpenAIChatClient()` has no
+    default model and raises `SettingNotFoundError` without one; fixed by defaulting to
+    `gpt-4o-mini` via `OPENAI_CHAT_MODEL` (also keeps the demo cheap to run).
+  - PR #11 (`story/remote-agent-runtime-fixes`, squash): (3) `WorkspaceV2.ID`'s branded schema
+    (`packages/schema/src/workspace-id.ts`) only accepted `wrk`-prefixed strings, but
+    `SessionRunnerRemote.remoteWorkspaceID()` deliberately produces `remote:<serverID>:<orchestratorID>`
+    sentinel strings for the exact same `Location.workspaceID` field — this made
+    `POST /experimental/remote-agent/select` throw on every call, i.e. remote-agent binding was
+    completely non-functional as merged in WS4. Fixed by widening the schema check to accept
+    either prefix. (4) MAF's `HandoffBuilder.build()` requires every participant `Agent` to set
+    `require_per_service_call_history_persistence=True`; the sample orchestrator never set it,
+    crashing the bridge on every WS session connect. Fixed by passing the flag in
+    `orchestrator.py`.
+  - **Verified fixed end-to-end**: created a session via `/api/session`, bound it via
+    `/experimental/remote-agent/select` (200, `workspaceID: "remote:demo-bridge:support"`), sent
+    a billing question via `/api/session/{id}/prompt`, and observed a real streamed assistant
+    message showing a live `triage -> billing` handoff relayed back into the session — the full
+    OpenCode -> RemoteLocationRunner -> bridge WS -> MAF handoff workflow -> OpenAI -> session
+    message path works. Phoenix UI (`localhost:6006`) confirmed reachable for trace verification.
+  - **Lesson**: WS1-WS4's test suites were correctly scoped to their own layer (unit/API-shape
+    tests), but none of them constituted a true Layer-4 (`VERIFY.md`) live run until this
+    dogfooding pass — that gap is exactly what Layer 4 exists to catch, and it did.
