@@ -16,6 +16,8 @@ from typing import Annotated
 
 from agent_framework import tool
 from agent_framework.openai import OpenAIChatClient
+
+from . import checkpoints
 from agent_framework import Workflow
 from agent_framework_orchestrations import HandoffBuilder
 
@@ -109,7 +111,8 @@ class OrchestratorSpec:
     participant_ids: tuple[str, ...]
     # `start_agent` selects which participant the conversation begins with; None uses the
     # workflow's own default. Lets a client address any agent in the network directly.
-    build: Callable[[RunLocalCommand, str | None], Workflow]
+    # `workflow_name` namespaces this session's checkpoints; see app/checkpoints.py.
+    build: Callable[[RunLocalCommand, str | None, str | None], Workflow]
     # Human-readable name/description per participant id, surfaced in the manifest so a client
     # can list and address every agent in the network individually. Ids missing here fall back
     # to the id itself as the name.
@@ -160,7 +163,11 @@ def make_run_local_command_tool(run_local_command: RunLocalCommand):
     )
 
 
-def _build_sample_support_workflow(run_local_command: RunLocalCommand, start_agent: str | None = None) -> Workflow:
+def _build_sample_support_workflow(
+    run_local_command: RunLocalCommand,
+    start_agent: str | None = None,
+    workflow_name: str | None = None,
+) -> Workflow:
     local_command_tool = make_run_local_command_tool(run_local_command)
 
     # Defaults to a low-cost chat model for manual/demo runs (overridable via OPENAI_CHAT_MODEL)
@@ -188,13 +195,16 @@ def _build_sample_support_workflow(run_local_command: RunLocalCommand, start_age
         require_per_service_call_history_persistence=True,
     )
     agents = {"triage": triage, "billing": billing, "refunds": refunds}
+    # The name namespaces checkpoints per session. It does not affect the graph signature that
+    # restore validates against, so a workflow rebuilt for a different session still restores.
     return (
         HandoffBuilder(
-            name="support",
+            name=workflow_name or "support",
             description="Support triage handoff group: triage, billing, refunds",
             participants=[triage, billing, refunds],
         )
         .with_start_agent(agents.get(start_agent or "triage", triage))
+        .with_checkpointing(checkpoints.storage())
         .build()
     )
 
