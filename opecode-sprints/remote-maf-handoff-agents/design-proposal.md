@@ -130,6 +130,34 @@ Original plan (kept for reference; not the actual location used):
 - `packages/core/src/session/execution.ts` — extend Location resolution to dispatch to `remote.ts` (exact line range to confirm at implementation time by re-reading current file).
 - `packages/opencode/src/remote-agent/manifest.ts` (new, with colocated test)
 
+**Specific change surface** — **as implemented** (superseding the plan above; see `wbs.md`'s
+Implementation status note for the full rationale):
+- `packages/core/src/config/remote-agent.ts` (new, not `packages/opencode/src/config/...` —
+  `remote_agent.servers` is resolved by `Config.Service` in `packages/core`, alongside every
+  other `ConfigX` module, not by `packages/opencode`).
+- `packages/core/src/session/execution/remote-protocol.ts` (new, as planned).
+- `packages/core/src/session/runner/remote.ts` (new, **not** `execution/remote.ts` — no second
+  `SessionExecution.Service` implementation exists or was needed; `SessionRunnerRemote`
+  satisfies `SessionRunner.Interface` directly, same as the local LLM runner).
+- `packages/core/src/session/runner/index.ts` — added `RemoteAgentError` to the `RunError` union.
+- `packages/core/src/location-services.ts` — `buildLocationServiceMap` swaps in
+  `SessionRunnerRemote.node` via its existing `replacements` mechanism, keyed on a
+  `remote:<serverID>:<orchestratorID>` `workspaceID` prefix, instead of a change to
+  `execution.ts` (which needed no changes at all).
+- `packages/core/src/remote-agent/manifest.ts` (new, not `packages/opencode/src/remote-agent/...`
+  — same package-placement reasoning as the config schema; `fetchManifest()` is a plain `fetch`
+  client with no `opencode`-specific dependency).
+- `packages/core/test/remote-protocol.test.ts`, `packages/core/test/session-runner-remote.test.ts`,
+  `packages/core/test/remote-agent-manifest.test.ts` (new — protocol encode/decode, workspace-ID
+  parsing + `steerToAgent`'s no-connection no-op path, and manifest HTTP client respectively; no
+  `packages/core/test/lib/remote-agent-server.ts` fake WS server was built this pass — see
+  `wbs.md`'s WS2 status note for the deferred live-connection integration-test gap).
+- `steerToAgent(sessionID, agentID)` (in `remote.ts`) is a **module-level export**, not a
+  `SessionRunner.Interface` method — it's backed by a module-scoped
+  `Map<SessionSchema.ID, RemoteConnection>` (moved out of the per-Location `Layer.effect` closure
+  specifically so it's reachable without resolving that Location's Effect layer first), matching
+  how WS4's future participant-picker UI action will need to call it directly.
+
 ---
 
 ### WS3 — remote-tool-bridge

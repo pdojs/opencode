@@ -21,6 +21,7 @@ import { ConfigMCP } from "./config/mcp"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigReference } from "./config/reference"
+import { ConfigRemoteAgent } from "./config/remote-agent"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigWatcher } from "./config/watcher"
 import { ConfigV1 } from "./v1/config/config"
@@ -83,6 +84,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   mcp: ConfigMCP.Info.pipe(Schema.optional).annotate({
     description: "MCP server configuration",
+  }),
+  remote_agent: ConfigRemoteAgent.Info.pipe(Schema.optional).annotate({
+    description: "Remote agent bridge server configuration",
   }),
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
