@@ -357,3 +357,62 @@ held with that agent, the current one marked `•`. Click another to switch to i
 From the home screen (no session open), `/agent` → pick a remote agent opens **Sessions with
 <agent>**: "New session" plus each prior conversation. Picking a prior one rejoins it, and the
 agent still remembers what was said.
+
+## Private (solo) conversations (WS16)
+
+Talking to one agent alone — no workflow, no handoffs, separate transcript.
+
+```bash
+cd test/remote-maf-handoff-agents
+.venv/bin/python - <<'PY'
+import asyncio, json, websockets
+SOLO = "ws://localhost:8000/agents/support/session?solo=true&start_agent=billing&session_id=demo-1"
+SHARED = "ws://localhost:8000/agents/support/session?session_id=demo-1"
+
+async def turn(url, text):
+    async with websockets.connect(url) as ws:
+        await ws.send(json.dumps({"type": "user_message", "text": text}))
+        out, handoffs, resumed = [], [], False
+        while True:
+            f = json.loads(await asyncio.wait_for(ws.recv(), timeout=120))
+            if f["type"] == "assistant_delta": out.append(f["text"])
+            elif f["type"] == "handoff": handoffs.append((f["source"], f["target"]))
+            elif f["type"] == "session_resumed": resumed = True
+            elif f["type"] in ("turn_complete", "error"): break
+        return "".join(out), handoffs, resumed
+
+async def main():
+    print(await turn(SOLO, "My invoice number is INV-5150. Just acknowledge it."))
+    print(await turn(SOLO, "What invoice number did I give you earlier?"))
+    print(await turn(SHARED, "What invoice number did I give you earlier?"))
+
+asyncio.run(main())
+PY
+```
+
+The first two calls report no handoffs, and the second reports `resumed=True` and repeats
+`INV-5150`. The third — the *shared* conversation under the same session id — does not know it.
+Restart the bridge and re-run the second call; it still recalls.
+
+Through OpenCode, `solo` is a flag on select:
+
+```bash
+curl -s -X POST "$B/experimental/remote-agent/select" -H 'content-type: application/json' \
+  -d "{\"sessionID\":\"$SID\",\"serverID\":\"demo-bridge\",\"orchestratorID\":\"support\",\"participantID\":\"billing\",\"solo\":true}"
+# -> workspaceID "remote:demo-bridge:support:billing:solo"
+```
+
+Omitting `participantID` with `solo: true` returns HTTP 400.
+
+### In the TUI
+
+`/agent` lists each remote agent twice: once under **Remote · Support** (enters the shared network
+conversation at that agent, handoffs apply) and once under **Remote · Support · Private** as
+"<Name> (private)". The sidebar heading reads **Private Sessions** for the latter and lists only
+that agent's private conversations.
+
+### What "private" means here
+
+Private *from the other agents*, not from the model provider. A private conversation's transcript
+lives service-side with the OpenAI client; only a pointer is stored on our volume. See the WS16
+deviation in `wbs.md`.

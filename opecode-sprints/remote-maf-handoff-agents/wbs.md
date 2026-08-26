@@ -871,3 +871,53 @@ session stops being listed under the agent. The conversation is not lost: naviga
 and selecting the agent again still resumes it from its checkpoint (verified above). Only its
 listing is affected. The detach/rejoin path the requirement asks for does not call `release` and is
 unaffected.
+
+## WS16 — private (solo) conversations (`solo-remote-sessions`)
+
+### Problem
+
+Every remote conversation went through the orchestrator's workflow, where a handoff network
+broadcasts the full conversation to every participant. There was no way to say something to one
+agent without the others seeing it, and no way to consult a single agent without the workflow
+deciding to hand the conversation elsewhere.
+
+### Resolution
+
+A `solo` connection skips the workflow entirely: one named participant, no handoff edges, and a
+transcript of its own. The sentinel gains a trailing `:solo` segment
+(`remote:<server>:<orchestrator>:<participant>:solo`), `select` accepts a `solo` flag, and the
+agent picker lists a private entry per agent alongside the network entries.
+
+Persistence differs by necessity. There is no workflow, so there is no workflow checkpoint;
+`app/sessions.py` stores the framework's own `AgentSession` instead, keyed per agent and session,
+so a private conversation rejoins exactly like a shared one.
+
+Connection reuse had to change with it. In the shared conversation, switching participants
+redirects the live socket, because every participant sees the same conversation. Solo is the
+opposite: each agent holds its own, so switching participants reconnects.
+
+### Verified
+
+- A private turn to `billing` engaged only `billing` and produced no handoff frames, where the
+  same orchestrator's shared conversation hands off to billing via triage.
+- Reconnecting a private session recalled `INV-5150`; so did a reconnect after a container restart.
+- An unused session id neither resumed nor recalled anything.
+- The shared conversation under the *same* session id did not know `INV-5150`, and a second private
+  agent (`refunds`) did not know an invoice given privately to `billing`.
+- End-to-end through `opencode serve`: select private `billing` → state `INV-3030` → release →
+  reselect → recalled. `solo` without a participant is rejected with HTTP 400.
+- 13 bridge tests pass (9 before); core, opencode and tui typecheck; remote-agent and
+  remote-stream suites pass.
+
+### Deviation
+
+**A private conversation's content is held by the model provider, not by this container.** With the
+OpenAI client the transcript lives service-side and `AgentSession.to_dict()` yields only a
+`service_session_id` pointer — around 140 bytes, with an empty `state`, confirmed by inspecting a
+real serialized session. Rejoining works, but unlike a handoff conversation (whose full content is
+checkpointed onto our own volume) deleting the local file does not delete the conversation, and
+retention is the provider's. A provider that keeps history client-side would populate `state`
+instead, which `app/sessions.py` stores just as well.
+
+This matters for the same reason telemetry content capture defaults off: "private" here means
+private *from the other agents*, not private from the model provider.
