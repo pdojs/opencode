@@ -19,6 +19,7 @@ describe("SessionRunnerRemote workspace ID encoding", () => {
       serverID: "bridge-1",
       orchestratorID: "support",
       participantID: undefined,
+      solo: false,
     })
   })
 
@@ -29,13 +30,27 @@ describe("SessionRunnerRemote workspace ID encoding", () => {
       serverID: "bridge-1",
       orchestratorID: "support",
       participantID: "refunds",
+      solo: false,
+    })
+  })
+
+  test("round-trips the solo segment marking a private conversation with one agent", () => {
+    const workspaceID = SessionRunnerRemote.remoteWorkspaceID("bridge-1", "support", "refunds", true)
+    expect(workspaceID).toBe("remote:bridge-1:support:refunds:solo")
+    expect(SessionRunnerRemote.parseRemoteWorkspaceID(workspaceID)).toEqual({
+      serverID: "bridge-1",
+      orchestratorID: "support",
+      participantID: "refunds",
+      solo: true,
     })
   })
 
   test("returns undefined for a malformed remote workspace ID with no orchestrator segment", () => {
     expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1")).toBeUndefined()
     expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1:support:")).toBeUndefined()
+    // A 4th segment is only meaningful as the solo marker.
     expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1:support:a:b")).toBeUndefined()
+    expect(SessionRunnerRemote.parseRemoteWorkspaceID("remote:bridge-1:support:a:solo:x")).toBeUndefined()
   })
 })
 

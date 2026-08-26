@@ -34,14 +34,33 @@ const REDIRECT_INSTRUCTION = (agentID: string) =>
 export const isRemoteWorkspaceID = (workspaceID: string | undefined): workspaceID is string =>
   workspaceID !== undefined && workspaceID.startsWith(WORKSPACE_ID_PREFIX)
 
-export const remoteWorkspaceID = (serverID: string, orchestratorID: string, participantID?: string) =>
-  [WORKSPACE_ID_PREFIX + serverID, orchestratorID, participantID].filter((part) => part !== undefined).join(":")
+// A trailing `:solo` marks a private conversation with one participant: no workflow, no handoffs,
+// and separate from the shared network conversation. It always carries a participant, since there
+// is no such thing as talking privately to the network as a whole.
+const SOLO_SEGMENT = "solo"
+
+export const remoteWorkspaceID = (
+  serverID: string,
+  orchestratorID: string,
+  participantID?: string,
+  solo?: boolean,
+) =>
+  [WORKSPACE_ID_PREFIX + serverID, orchestratorID, participantID, solo ? SOLO_SEGMENT : undefined]
+    .filter((part) => part !== undefined)
+    .join(":")
 
 export const parseRemoteWorkspaceID = (workspaceID: string) => {
   const parts = workspaceID.slice(WORKSPACE_ID_PREFIX.length).split(":")
-  if (parts.length < 2 || parts.length > 3) return undefined
+  if (parts.length < 2 || parts.length > 4) return undefined
   if (parts.some((part) => part === "")) return undefined
-  return { serverID: parts[0]!, orchestratorID: parts[1]!, participantID: parts[2] as string | undefined }
+  const solo = parts.length === 4
+  if (solo && parts[3] !== SOLO_SEGMENT) return undefined
+  return {
+    serverID: parts[0]!,
+    orchestratorID: parts[1]!,
+    participantID: parts[2] as string | undefined,
+    solo,
+  }
 }
 
 /** Finds the newest user-authored turn text in already-recorded history, for sending to the remote agent. */
@@ -59,9 +78,11 @@ const toWebSocketURL = (
   orchestratorID: string,
   participantID?: string,
   sessionID?: string,
+  solo?: boolean,
 ) => {
   const query = new URLSearchParams()
   if (participantID) query.set("start_agent", participantID)
+  if (solo) query.set("solo", "true")
   // Correlates the bridge's OTel spans with this Session so a trace in Phoenix can be traced
   // back to the conversation that produced it.
   if (sessionID) query.set("session_id", sessionID)
@@ -221,6 +242,7 @@ const connect = (url: string) =>
 type Bound = {
   readonly orchestratorURL: string
   readonly participantID: string | undefined
+  readonly solo: boolean
   readonly connection: RemoteConnection
 }
 
@@ -238,28 +260,34 @@ export const openConnection = Effect.fn("SessionRunner.remote.openConnection")(f
   orchestratorID: string,
   baseURL: string,
   participantID?: string,
+  solo = false,
 ) {
   const orchestratorURL = toWebSocketURL(baseURL, orchestratorID)
   const existing = connections.get(sessionID)
 
-  if (existing && existing.orchestratorURL === orchestratorURL) {
+  if (existing && existing.orchestratorURL === orchestratorURL && existing.solo === solo) {
     if (existing.participantID === participantID) return existing.connection
     // Same workflow, different participant. The whole conversation — which in a handoff network
     // every participant can see — lives in the MAF workflow behind this socket, so switching
     // agents must redirect the running conversation rather than start a new one. `start_agent`
     // is fixed at connect time, hence the in-conversation redirect on the next turn.
-    if (participantID) existing.connection.redirectTo(participantID)
-    connections.set(sessionID, { orchestratorURL, participantID, connection: existing.connection })
-    return existing.connection
+    //
+    // Solo is the opposite case: each agent holds its own private conversation, so switching
+    // agents means a different conversation entirely and has to reconnect.
+    if (!solo) {
+      if (participantID) existing.connection.redirectTo(participantID)
+      connections.set(sessionID, { orchestratorURL, participantID, solo, connection: existing.connection })
+      return existing.connection
+    }
   }
 
   // A different orchestrator is a genuinely different workflow; nothing to carry over.
   if (existing) {
-    existing.connection.close("rebound to a different remote orchestrator")
+    existing.connection.close("rebound to a different remote conversation")
     connections.delete(sessionID)
   }
-  const connection = yield* connect(toWebSocketURL(baseURL, orchestratorID, participantID, sessionID))
-  connections.set(sessionID, { orchestratorURL, participantID, connection })
+  const connection = yield* connect(toWebSocketURL(baseURL, orchestratorID, participantID, sessionID, solo))
+  connections.set(sessionID, { orchestratorURL, participantID, solo, connection })
   return connection
 })
 
@@ -331,8 +359,9 @@ const layer = Layer.effect(
       serverID: string,
       orchestratorID: string,
       participantID: string | undefined,
+      solo: boolean,
     ) {
-      return yield* openConnection(sessionID, orchestratorID, yield* resolveServerURL(serverID), participantID)
+      return yield* openConnection(sessionID, orchestratorID, yield* resolveServerURL(serverID), participantID, solo)
     })
 
     /** Bridges one remote turn's frames into the same SessionEvent stream the local runner emits. */
@@ -456,6 +485,7 @@ const layer = Layer.effect(
         target.serverID,
         target.orchestratorID,
         target.participantID,
+        target.solo,
       )
       yield* runTurn(input.sessionID, target.orchestratorID, connection, text).pipe(
         Effect.onInterrupt(() =>
