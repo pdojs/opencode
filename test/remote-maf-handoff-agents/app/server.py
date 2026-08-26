@@ -22,11 +22,13 @@ from pydantic import TypeAdapter, ValidationError
 from opentelemetry import trace
 
 from .orchestrator import PATTERN_SEMANTICS, OrchestratorSpec, default_orchestrators
+from . import checkpoints
 from .protocol import (
     AssistantDeltaFrame,
     ClientFrame,
     HandoffFrame,
     Manifest,
+    SessionResumedFrame,
     SteerToAgentFrame,
     ToolCallFrame,
     ToolResultFrame,
@@ -106,7 +108,18 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
             finally:
                 pending_tool_calls.pop(call_id, None)
 
-        workflow = spec.build(run_local_command, start_agent)
+        name = checkpoints.workflow_name(orchestrator_id, session_id)
+        workflow = spec.build(run_local_command, start_agent, name)
+
+        # Rejoin rather than restart. The Workflow object is per-connection, but its conversation
+        # is durable, so a reconnect carrying the same session id picks the conversation back up.
+        # Only a checkpoint taken while the workflow was idle awaiting a user turn can be
+        # continued, which is what `latest_resumable` selects for.
+        resume_from = await checkpoints.latest_resumable(name) if session_id else None
+        if resume_from:
+            await websocket.send_json(
+                SessionResumedFrame(session_id=session_id or "", checkpoint_id=resume_from.checkpoint_id).model_dump()
+            )
 
         async def read_frames() -> None:
             try:
@@ -140,14 +153,27 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
                 text = await turn_queue.get()
                 if text is None:
                     break
-                stream = (
-                    workflow.run(text, stream=True)
-                    if pending_request_id is None
-                    else workflow.run(
+                resumed_this_turn = pending_request_id is None and resume_from is not None
+                if pending_request_id is not None:
+                    stream = workflow.run(
                         stream=True,
                         responses={pending_request_id: HandoffAgentUserRequest.create_response(text)},
                     )
-                )
+                elif resume_from is not None:
+                    # "Restore then send": the checkpoint's pending request keeps its original id
+                    # across restore, so the turn is delivered as a continuation of the restored
+                    # conversation rather than as a fresh one.
+                    stream = workflow.run(
+                        stream=True,
+                        checkpoint_id=resume_from.checkpoint_id,
+                        responses={
+                            request_id: HandoffAgentUserRequest.create_response(text)
+                            for request_id in resume_from.pending_request_info_events
+                        },
+                    )
+                    resume_from = None
+                else:
+                    stream = workflow.run(text, stream=True)
                 # A bridge-owned span per user turn. Without it the Phoenix trace list shows only
                 # `workflow.run` / `workflow.build`, and identifying which agent actually answered
                 # means drilling into the executor tree. This span names the engaged agents up
@@ -159,6 +185,7 @@ def create_app(orchestrators: list[OrchestratorSpec] | None = None) -> FastAPI:
                         span.set_attribute("maf.start_agent", start_agent)
                     if session_id:
                         span.set_attribute("session.id", session_id)
+                    span.set_attribute("maf.session.resumed", resumed_this_turn)
                     engaged: list[str] = []
                     pending_request_id = await _consume_workflow_events(stream, websocket, engaged)
                     if engaged:

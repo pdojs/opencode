@@ -121,8 +121,8 @@ def _two_agent_handoff_spec() -> OrchestratorSpec:
     # `alpha` always hands off to `beta`; `beta` never hands off, so after its reply the
     # workflow requests the next user input (human-in-loop default) — this proves the
     # assistant_delta* -> handoff -> assistant_delta* -> turn_complete frame sequence.
-    def build(run_local_command: Any, start_agent: str | None = None) -> Any:
-        del run_local_command, start_agent
+    def build(run_local_command: Any, start_agent: str | None = None, workflow_name: str | None = None) -> Any:
+        del run_local_command, start_agent, workflow_name
         alpha = _mock_agent("alpha", handoff_to="beta")
         beta = _mock_agent("beta")
         return HandoffBuilder(name="demo", participants=[alpha, beta]).with_start_agent(alpha).build()
@@ -136,8 +136,8 @@ def _three_agent_spec() -> OrchestratorSpec:
     # None of the three hand off on their own; a `steer_to_agent` frame is the only thing that
     # causes a handoff, proving the advisory-nudge mechanism in isolation from any "agent
     # decided to hand off anyway" ambiguity.
-    def build(run_local_command: Any, start_agent: str | None = None) -> Any:
-        del run_local_command
+    def build(run_local_command: Any, start_agent: str | None = None, workflow_name: str | None = None) -> Any:
+        del run_local_command, workflow_name
         alpha = _mock_agent("alpha")
         beta = _mock_agent("beta")
         gamma = _mock_agent("gamma")
@@ -297,8 +297,8 @@ def test_manifest_advertises_pattern_semantics() -> None:
 
 
 def test_tool_call_bridge_round_trip() -> None:
-    def build(run_local_command: Any, start_agent: str | None = None) -> Any:
-        del start_agent
+    def build(run_local_command: Any, start_agent: str | None = None, workflow_name: str | None = None) -> Any:
+        del start_agent, workflow_name
         agent = Agent(
             client=_ToolCallingMockChatClient(),
             name="assistant",

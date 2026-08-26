@@ -293,3 +293,67 @@ ENABLE_SENSITIVE_DATA=true docker compose -f docker-compose.yml up -d bridge
 
 Never enable it against a shared or hosted collector: it exports raw conversation text,
 including anything an agent read out of the local workspace via `run_local_command`.
+
+## Rejoining a remote conversation (WS14/WS15)
+
+Checkpoints persist on the `bridge-checkpoints` volume, so a conversation survives both a dropped
+socket and a container restart.
+
+Straight against the bridge — state a fact, close the socket, reconnect with the same
+`session_id`, ask for it back:
+
+```bash
+cd test/remote-maf-handoff-agents
+.venv/bin/python - <<'PY'
+import asyncio, json, websockets
+URL = "ws://localhost:8000/agents/support/session?session_id=probe-1"
+
+async def turn(text):
+    async with websockets.connect(URL) as ws:
+        await ws.send(json.dumps({"type": "user_message", "text": text}))
+        out = []
+        while True:
+            f = json.loads(await asyncio.wait_for(ws.recv(), timeout=120))
+            if f["type"] == "assistant_delta": out.append(f["text"])
+            elif f["type"] == "session_resumed": print("resumed from", f["checkpoint_id"])
+            elif f["type"] in ("turn_complete", "error"): break
+        return "".join(out)
+
+async def main():
+    print(await turn("My invoice number is INV-8823. Just acknowledge it."))
+    print(await turn("What invoice number did I give you earlier?"))
+
+asyncio.run(main())
+PY
+```
+
+The second turn prints a `resumed from ...` line and repeats `INV-8823`. Re-run it after
+`docker restart remote-maf-handoff-agents-bridge-1` and it still does. Change `session_id` to
+something unused and it neither resumes nor recalls anything.
+
+Through OpenCode, including a full unbind in the middle:
+
+```bash
+B=http://localhost:4599
+SID=$(curl -s -X POST "$B/session" -H 'content-type: application/json' \
+  -d '{"directory":"/private/tmp/maf-demo-workspace"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+sel() { curl -s -X POST "$B/experimental/remote-agent/select" -H 'content-type: application/json' \
+  -d "{\"sessionID\":\"$SID\",\"serverID\":\"demo-bridge\",\"orchestratorID\":\"support\"}"; }
+say() { curl -s -X POST "$B/session/$SID/message" -H 'content-type: application/json' -d "{\"parts\":[{\"type\":\"text\",\"text\":\"$1\"}]}"; }
+
+sel; say "My invoice number is INV-9911. Just acknowledge it."
+curl -s -X POST "$B/experimental/remote-agent/release" -H 'content-type: application/json' -d "{\"sessionID\":\"$SID\"}"
+sel; say "What invoice number did I give you earlier?"
+```
+
+The last turn repeats `INV-9911`. Running this before WS14 returned *"I can't recall previous
+messages"* at that point.
+
+### In the TUI
+
+With a remote agent selected, the sidebar shows a **Remote Sessions** section listing every session
+held with that agent, the current one marked `•`. Click another to switch to it.
+
+From the home screen (no session open), `/agent` → pick a remote agent opens **Sessions with
+<agent>**: "New session" plus each prior conversation. Picking a prior one rejoins it, and the
+agent still remembers what was said.

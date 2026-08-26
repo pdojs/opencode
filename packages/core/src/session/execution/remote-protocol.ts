@@ -57,6 +57,12 @@ export class TurnCompleteFrame extends Schema.Class<TurnCompleteFrame>("RemotePr
   type: Schema.Literal("turn_complete"),
 }) {}
 
+export class SessionResumedFrame extends Schema.Class<SessionResumedFrame>("RemoteProtocol.SessionResumedFrame")({
+  type: Schema.Literal("session_resumed"),
+  session_id: Schema.String,
+  checkpoint_id: Schema.String,
+}) {}
+
 export class ErrorFrame extends Schema.Class<ErrorFrame>("RemoteProtocol.ErrorFrame")({
   type: Schema.Literal("error"),
   message: Schema.String,
@@ -67,6 +73,7 @@ export const ServerFrame = Schema.Union([
   HandoffFrame,
   ToolCallFrame,
   TurnCompleteFrame,
+  SessionResumedFrame,
   ErrorFrame,
 ])
 export type ServerFrame = typeof ServerFrame.Type
