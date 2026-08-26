@@ -77,6 +77,12 @@ relying on `cd`.
 
 ## 3. Run Demo 1 — select, converse, observe
 
+Remote turns render through the **V1** message path as of PR #16 (`wbs.md` WS8): the TUI's
+timeline only understands V1 `message.updated` / `message.part.updated`, so `SessionLLM.stream`
+is substituted for remote-bound Sessions instead of routing prompts to the V2 endpoint. Nothing
+changes in how you drive the demo — but if you are debugging with `curl`, use
+`POST /session/{id}/message`, not `/api/session/{id}/prompt`, to see what the TUI sees.
+
 Follow `test-requirements.md`'s Demo 1 table exactly (rows 1-6):
 
 1. `/agent` → picker opens with **Native** / **Workspace** / **Remote** sections.
@@ -85,6 +91,10 @@ Follow `test-requirements.md`'s Demo 1 table exactly (rows 1-6):
 4. Confirm the reply streams incrementally (not one instantaneous block).
 5. Confirm a handoff indicator (inline `↪ handoff: triage → billing` text — see the WS4
    deviation note below) appears when the sample agents hand off.
+6a. Optional local-workspace check: `echo hello-from-workspace > marker.txt` in the workspace,
+   then ask "Run this in my local workspace: cat marker.txt". The remote agent's
+   `run_local_command` is bridged to OpenCode's `bash` tool and runs on **your** machine under
+   the normal permission prompts, so the reply should quote the file's real contents.
 6. Confirm a coherent final reply, then open `http://localhost:6006` and confirm a trace
    appears for this run with spans for the workflow execution and the `triage → billing`
    handoff.
