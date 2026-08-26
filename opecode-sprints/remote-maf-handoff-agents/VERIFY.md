@@ -43,19 +43,37 @@ yet (traces appear once a turn is run in step 3+).
 ## 2. Configure OpenCode to see the bridge
 
 In the workspace directory from step 0, add to OpenCode's config (per WS2's config schema,
-`packages/core/src/config.ts`'s `remote_agent` field):
+`packages/core/src/config/remote-agent.ts`'s `remote_agent.servers` field — an **array** of
+`{id, url}` objects, not a keyed/dict object):
 
 ```json
 {
   "remote_agent": {
-    "servers": {
-      "demo-bridge": { "url": "http://localhost:8000" }
-    }
+    "servers": [
+      { "id": "demo-bridge", "url": "http://localhost:8000" }
+    ]
   }
 }
 ```
 
-Start OpenCode's TUI in that workspace directory.
+Start OpenCode's TUI **with the workspace directory passed as the `[project]` positional
+argument**, not just via `cd`:
+
+```bash
+bun run --cwd /path/to/opencode/packages/opencode --conditions=browser src/index.ts /path/to/workspace
+```
+
+**Gotcha**: `bun run --cwd <opencode-repo-path>` is required so bun can resolve
+`node_modules`/`react/jsx-dev-runtime` etc from the opencode package — but it also silently
+overrides `process.cwd()` for the *entire* process, including OpenCode's own project-directory
+resolution (`resolveThreadDirectory` in `packages/opencode/src/cli/cmd/tui.ts`, which only reads
+`process.cwd()` when no `[project]` arg is given — it does **not** fall back to reading
+`$PWD`). A plain `cd /path/to/workspace && bun run --cwd .../packages/opencode ...` will boot
+the TUI against the *opencode repo* directory instead of your workspace, silently ignoring your
+workspace's `opencode.json` (including its `remote_agent.servers` entries) — the `/agent` picker
+will then only show "Native"/"Workspace" agents with no "Remote" section, with no error shown.
+Always pass the workspace path explicitly as the trailing `[project]` argument instead of
+relying on `cd`.
 
 ## 3. Run Demo 1 — select, converse, observe
 
