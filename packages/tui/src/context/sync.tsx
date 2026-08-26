@@ -574,6 +574,9 @@ export const {
           if (match.found) return store.session[match.index]
           return undefined
         },
+        list() {
+          return store.session
+        },
         query() {
           return sessionListQuery()
         },
