@@ -392,3 +392,94 @@ and `VERIFY.md` recorded Demo 3 rows 11-14 as blocked.
 - Live against the Docker bridge: idle steer → `{"delivered":false}`; mid-turn steer →
   `{"delivered":true}` followed by `↪ handoff: triage → refunds` and the refunds agent's reply
   inside one assistant message; a following "What is 2+2?" answered `4`.
+
+---
+
+## WS10 — address-any-agent (added after WS9)
+
+### Goal
+
+`/agent` lists every agent in a remote handoff network — the orchestrator *and* each of its
+participants — and selecting any one of them binds the session so the conversation starts at
+that agent.
+
+### Problem
+
+`/agent` listed only orchestrators, so the user could only ever enter a network through its
+default start agent (`triage`). Asking the orchestrator "which agents are helping you?" returned
+prose, not a selectable roster: the sub-agents were invisible and unaddressable.
+
+### Preliminary investigation and root cause
+
+Three hard-coded assumptions, one per layer:
+
+1. `test/remote-maf-handoff-agents/app/orchestrator.py` — `_build_sample_support_workflow` called
+   `.with_start_agent(triage)` unconditionally, and `OrchestratorSpec.build` took only
+   `run_local_command`, so nothing could express "start elsewhere".
+2. `packages/core/src/session/runner/remote.ts` — the sentinel was `remote:<server>:<orchestrator>`
+   with a two-part parser (`indexOf(":")`), so a participant had nowhere to live. `openConnection`
+   cached per session ID alone, so a rebind would silently reuse a socket already fixed to the
+   old start agent.
+3. `packages/tui/src/component/dialog-agent.tsx` — the remote section mapped
+   `server.manifest.orchestrators` one-to-one, dropping `orchestrator.participants` entirely.
+
+The manifest already carried `participants`, but only as `{id, name}` with `name == id`, so even
+surfacing them would have produced an unreadable list.
+
+### Definition of Done
+
+- `GET /agents/manifest` returns each participant with a human-readable `name` and `description`.
+- Running `/agent` shows one entry per orchestrator and one per participant, grouped under a
+  `Remote · <orchestrator>` heading.
+- Selecting a participant sets `workspaceID` to `remote:<server>:<orchestrator>:<participant>`.
+- Prompting that session is answered by the selected participant, and the assistant message and
+  status bar are labelled with the participant's id, not the orchestrator's.
+- Selecting a different participant on a live session reconnects rather than reusing the socket.
+- Selecting an orchestrator with no participant keeps working unchanged (start agent as before).
+- An unknown participant is rejected by both the select endpoint and the bridge WebSocket.
+
+### Resolution via WBS
+
+1. Accept `?start_agent=` on the bridge session WebSocket; validate against `participant_ids` and
+   close 4404 when unknown. Commit: `feat(bridge): let a session start on any participant in the network`.
+2. Extend the sentinel to an optional third segment, send it as `start_agent`, and reconnect when
+   the target changes. Commit: `feat(core): address a single participant via the remote workspace sentinel`.
+3. Regenerate the SDK. Commit: `chore(sdk): regenerate types for the remote-agent participant selector`.
+4. Emit a picker entry per participant and label the bound agent.
+   Commit: `feat(tui): list and select every agent in a remote handoff network`.
+
+### Specific change surface
+
+- `test/remote-maf-handoff-agents/app/server.py` — `session(...)` takes `start_agent`, validates it,
+  passes it to `spec.build`.
+- `test/remote-maf-handoff-agents/app/orchestrator.py` — `OrchestratorSpec.build` takes
+  `start_agent`; new `participant_details` field feeds names/descriptions into `manifest_entry()`;
+  `_build_sample_support_workflow` resolves the start agent from an `agents` dict.
+- `test/remote-maf-handoff-agents/app/protocol.py` — `Participant.description`.
+- `packages/core/src/session/execution/remote-protocol.ts` — mirrors `Participant.description`.
+- `packages/core/src/session/runner/remote.ts` — `remoteWorkspaceID`/`parseRemoteWorkspaceID` take
+  the participant segment (split-based, replacing `indexOf`); `toWebSocketURL` appends
+  `?start_agent=`; `connections` keys a `{url, connection}` pair so `openConnection` closes and
+  reopens on target change; `connectionFor` threads `participantID`.
+- `packages/opencode/src/session/llm/remote-stream.ts` — `Target.participantID`, forwarded to
+  `openConnection`.
+- `packages/opencode/src/session/prompt.ts` — `remoteLabel` prefers the participant for the
+  assistant message's `agent`/`mode`/`modelID`.
+- `packages/opencode/src/server/routes/instance/httpapi/{groups,handlers}/remote-agent.ts` —
+  optional `participantID` on `SelectPayload`, validated against the live manifest.
+- `packages/sdk/js/src/v2/gen/{sdk,types}.gen.ts` — regenerated.
+- `packages/tui/src/util/remote-agent.ts` — participant-aware parser.
+- `packages/tui/src/component/dialog-agent.tsx` — an option per participant; participant-aware
+  `currentRemote` highlight; `participantID` sent on select.
+- `packages/tui/src/component/prompt/index.tsx` — status bar names the bound participant.
+
+### Verified
+
+- 7 bridge tests pass, including a new pair asserting `?start_agent=gamma` starts at `gamma`
+  (where the default is `alpha`) and that an unknown participant is refused with 4404.
+- `bun typecheck` clean in `core`, `opencode`, and `tui`; 4 TUI and 6 core sentinel tests pass.
+- Live against the rebuilt Docker bridge: the manifest lists Triage/Billing/Refunds with
+  descriptions; selecting `refunds` yields `remote:demo-bridge:support:refunds` and a turn
+  labelled `agent: refunds` answering "You're speaking with a refunds agent…"; re-selecting
+  `billing` on the same session reconnects and answers as billing; `participantID: "nope"` is
+  rejected; omitting `participantID` still yields `remote:demo-bridge:support`.

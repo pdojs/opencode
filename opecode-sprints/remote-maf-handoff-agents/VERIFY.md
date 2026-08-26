@@ -85,8 +85,12 @@ changes in how you drive the demo — but if you are debugging with `curl`, use
 
 Follow `test-requirements.md`'s Demo 1 table exactly (rows 1-6):
 
-1. `/agent` → picker opens with **Native** / **Workspace** / **Remote** sections.
-2. Select the `demo-bridge` orchestrator entry under **Remote**.
+1. `/agent` → picker opens with **Native** / **Workspace** sections plus a
+   **Remote · Support Triage** section. As of WS10 that section lists the orchestrator
+   (`Support Triage`) *and* every agent in its network — `Triage`, `Billing`, `Refunds` —
+   each with a description. Selecting a participant starts the conversation at that agent
+   instead of at the network's default start agent; handoffs still apply from there.
+2. Select the `Support Triage` orchestrator entry under **Remote · Support Triage**.
 3. Send "I need help with a billing question."
 4. Confirm the reply streams incrementally (not one instantaneous block).
 5. Confirm a handoff indicator (inline `↪ handoff: triage → billing` text — see the WS4
@@ -95,6 +99,11 @@ Follow `test-requirements.md`'s Demo 1 table exactly (rows 1-6):
    then ask "Run this in my local workspace: cat marker.txt". The remote agent's
    `run_local_command` is bridged to OpenCode's `bash` tool and runs on **your** machine under
    the normal permission prompts, so the reply should quote the file's real contents.
+6b. Optional roster check (WS10): run `/agent` again and pick **Refunds**. The status bar
+   bottom-left should now read `Refunds` (not `Support` or `Build`). Ask "Who am I speaking
+   with?" — the reply should come from the refunds agent directly, with no triage greeting
+   first. Picking a different participant on the same session reconnects the bridge, so the
+   next turn starts at the newly-selected agent.
 6. Confirm a coherent final reply, then open `http://localhost:6006` and confirm a trace
    appears for this run with spans for the workflow execution and the `triage → billing`
    handoff.
