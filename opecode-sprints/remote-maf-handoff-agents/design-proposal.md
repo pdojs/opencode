@@ -357,6 +357,48 @@ see the deviation notes below for what's deferred):
 
 ---
 
+## Architecture confirmation: agents-as-services with a streaming router (raised post-WS4)
+
+User question: given Azure API Center's model of registering managed agents as services with an
+exposed API (https://learn.microsoft.com/en-us/azure/api-center/register-manage-agents), should
+our container expose agents as services behind a router, with all interaction going over a
+protocol that supports streaming — and does this significantly change the current app?
+
+**Conclusion: no architectural change needed — WS1-WS4 already implement exactly this shape.**
+Verified against the current code (not speculative):
+
+- **The container is already the "agent host" exposing a service registry.** `create_app()`
+  (`test/remote-maf-handoff-agents/app/server.py:43-54`) builds a `registry: dict[str, OrchestratorSpec]`
+  keyed by orchestrator id and exposes it as `GET /agents/manifest` — the same role Azure API
+  Center's agent-card registration plays (a discoverable list of callable agents), just scoped to
+  one container instead of a tenant-wide control plane. Azure API Center's own docs describe
+  registering "an agent described by an agent card in JSON format" — our `Manifest`/`OrchestratorSpec.manifest_entry()`
+  JSON shape is a lighter-weight analog of that same agent-card concept, not a different idea.
+- **The container already has a router dispatching to a specific agent-as-a-service instance.**
+  `@app.websocket("/agents/{orchestrator_id}/session")` (`server.py:56-61`) looks up
+  `registry.get(orchestrator_id)` and rejects unknown ids with a close frame — this *is* the
+  "router in our agent host" the question describes; it already exists, keyed by the same id the
+  manifest advertises.
+- **All interaction is already streaming, over one long-lived channel per agent.** The same WS
+  connection carries `assistant_delta`/`handoff`/`turn_complete` frames outbound and
+  `user_message`/`tool_result` frames inbound (`protocol.py`, consumed by WS2's
+  `packages/core/src/session/runner/remote.ts`) — there is no separate polling or request/response
+  fallback path; every turn, every handoff notice, and every tool call/result crosses this one
+  streaming socket. WS4's picker binds a Session's `Location` to `remote:<serverID>:<orchestratorID>`
+  (i.e. "which service instance"), so selecting *any* agent — not just a fixed default — already
+  gets the same streaming treatment, satisfying the "streaming can be with ANY agent selected"
+  requirement from the original ask.
+- **What's genuinely new vs. Azure API Center's model**: API Center centralizes registration
+  across many teams/agents in one control plane and standardizes on the A2A agent-card + JSON-RPC
+  transport. Our PoC has one container acting as both registry and router for its own agents, using
+  a bespoke (not A2A) manifest/WS wire format. This distinction is already captured in the
+  "A2A-protocol alignment" deferred item below — adopting the A2A wire format is the only piece of
+  this idea not yet done, and it's an orthogonal protocol swap, not a change to the
+  service-with-a-router-and-streaming shape itself.
+
+No new workstream or code change follows from this — WS5 (compose-dev-env) remains the only
+outstanding work, and it demos this exact shape end-to-end.
+
 ## Deferred / nice to have later
 
 - Live discovery (Consul/docker-labels) instead of statically configured container URLs — deferred; static `remoteAgent.servers` config is sufficient for the PoC.
