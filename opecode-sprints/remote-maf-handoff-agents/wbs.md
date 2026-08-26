@@ -560,6 +560,145 @@ Queried Phoenix's GraphQL API directly after rebuilding the container and replay
 ### Security note
 
 Content capture exports raw conversation text, including anything an agent reads out of the
-local workspace via `run_local_command`. It is defaulted on because this PoC's collector is a
-Phoenix on localhost; set `ENABLE_SENSITIVE_DATA=false` before pointing
-`PHOENIX_COLLECTOR_ENDPOINT` at any shared or hosted backend.
+local workspace via `run_local_command`. WS12 flipped the default to off; opt in per-run with
+`ENABLE_SENSITIVE_DATA=true docker compose ... up -d bridge`, and never against a shared or
+hosted collector.
+
+
+---
+
+## WS12 — workflow-session-semantics
+
+### Goal
+
+A remote session behaves the way the backend orchestration actually behaves: switching to a
+different participant keeps the conversation, the manifest states each orchestrator's context
+and addressing semantics, Phoenix names the agents that handled each turn, and no conversation
+content leaves the process unless someone opts in.
+
+### Problem
+
+Four observable symptoms, reported by the user after WS11:
+
+1. Picking a different participant lost the entire conversation. The agent that answered had no
+   memory of anything said before the switch.
+2. A picked participant frequently did not become the responder — asked to hand off to
+   `refunds`, `billing` kept answering.
+3. Phoenix showed only `workflow.run` / `workflow.build` chain spans. Answering "which agent was
+   engaged?" meant drilling into the executor tree.
+4. Prompt and completion content was exported to the collector by default.
+
+### Preliminary investigation and root cause
+
+**Symptom 1.** `packages/core/src/session/runner/remote.ts` keyed its per-Session connection map
+on the full WebSocket URL, and `start_agent` is a query parameter on that URL. So a participant
+switch produced a different URL, which closed the socket and opened a new one. That is fatal
+because the MAF workflow instance is created per-connection server-side
+(`app/server.py` `session(...)`), and MAF's handoff pattern keeps the whole conversation inside
+the workflow: every participant holds a synchronized replica. One socket = one conversation.
+
+**Symptom 2.** `_HANDOFF_COMPLIANCE_INSTRUCTION` in `app/orchestrator.py` told agents to comply
+with an explicit handoff request *"unless doing so would be clearly irrelevant to their
+request"*. Agents used that escape hatch. `HandoffBuilder` defaults to a mesh topology
+(`_handoff.py:714-760` — "If no handoffs are specified, all agents can hand off to all others"),
+so the routing was available; the model simply declined to use it.
+
+**Symptom 3.** The bridge owned no spans of its own. Everything in Phoenix came from MAF's own
+instrumentation, which names spans after workflow executors rather than after conversational
+agents.
+
+**Symptom 4.** `ENABLE_SENSITIVE_DATA=true` was set in `docker-compose.yml` by WS11 to prove the
+wiring worked, and was never flipped back.
+
+**Pattern semantics investigation.** The user's stated model — handoff means scoped narrow
+passdown, group chat means complete context — turns out to be inverted for handoff. Read from
+the orchestration builders in `agent-framework`:
+
+| Pattern | Context scope | Multi-turn | Addressable |
+|---|---|---|---|
+| Handoff | **shared** — continuous broadcast; each participant keeps a synchronized replica | yes — `request_info` continues the same run | yes (`.with_start_agent()`) |
+| Group chat | shared — the orchestrator's `_full_conversation` is authoritative | no — single-shot per run | no |
+| Magentic | shared for participants, richer for the manager | no — `_terminated=True` after the final answer | no |
+| Sequential | shared by default (`prior.full_conversation` forwarded); **scoped** with `chain_only_agent_responses=True` | no | no |
+| Concurrent | **isolated** — each agent sees only the original user input | no | no |
+
+Two consequences: **concurrent is the narrow pass-down, not handoff**; and sequential's scope is
+a build-time property, so it cannot be derived from the pattern name and needs a per-orchestrator
+override.
+
+### Definition of Done
+
+- `GET /agents/manifest` reports `pattern`, `context_scope`, `multi_turn` and `addressable` per
+  orchestrator.
+- Switching participant mid-conversation keeps the conversation: the newly-picked agent can
+  answer a question that depends on something said before the switch.
+- The newly-picked agent, not the previous one, is the responder.
+- Switching to a different *orchestrator* still opens a fresh workflow.
+- A Phoenix trace names the handoff chain for each turn and carries the orchestrator, its
+  pattern, the responding agent and the OpenCode session id.
+- With no opt-in, no span contains conversation content.
+- The `/agent` picker offers no participant entries for a non-addressable pattern.
+
+### Resolution via WBS
+
+1. `fix(bridge): make Phoenix content capture opt-in` — default `ENABLE_SENSITIVE_DATA=false`,
+   document the opt-in and the "never against a shared collector" rule.
+2. `feat(bridge): advertise per-pattern session semantics in the manifest` — `PATTERN_SEMANTICS`
+   in `app/orchestrator.py`, four capability fields on `OrchestratorManifestEntry`, and a 4400
+   refusal when `start_agent` is given for a non-addressable pattern.
+3. `feat(bridge): name the engaged agents on a per-turn Phoenix span` — bridge-owned span per
+   turn, renamed to the handoff chain once known; handoff edges count towards the chain, not
+   just agents that produced output.
+4. `feat(core): mirror pattern capability fields into the remote protocol` — optional fields so
+   an older bridge still parses; regenerate the JS SDK.
+5. `fix(core): preserve the conversation when switching remote participants` — re-key the
+   connection map on orchestrator URL, add `redirectTo`/`sendUserTurn` to `RemoteConnection`,
+   thread the session id into the connect URL.
+6. `fix(bridge): make a picked participant actually become the responder` — remove the
+   compliance escape hatch.
+7. `feat(tui): hide participant entries for non-addressable patterns`.
+
+### Specific change surface
+
+- `opecode-sprints/remote-maf-handoff-agents/docker-compose.yml` — `ENABLE_SENSITIVE_DATA`
+  default and opt-in documentation.
+- `test/remote-maf-handoff-agents/app/protocol.py` — `OrchestratorManifestEntry` capability
+  fields; consumed by `manifest_entry()` below.
+- `test/remote-maf-handoff-agents/app/orchestrator.py` — `PATTERN_SEMANTICS`; `OrchestratorSpec`
+  `pattern` / `context_scope_override`; `manifest_entry()` emits the fields;
+  `_HANDOFF_COMPLIANCE_INSTRUCTION` made unconditional.
+- `test/remote-maf-handoff-agents/app/server.py` — `_tracer`; `session_id` query param; 4400
+  refusal for non-addressable patterns; per-turn span; `_consume_workflow_events(..., engaged)`.
+- `test/remote-maf-handoff-agents/tests/test_server.py` — 9 tests.
+- `packages/core/src/session/execution/remote-protocol.ts` — capability fields mirrored.
+- `packages/sdk/js/src/v2/gen/types.gen.ts` — regenerated, so the TUI sees `addressable`.
+- `packages/core/src/session/runner/remote.ts` — `REDIRECT_INSTRUCTION`; `pendingRedirect`,
+  `redirectTo()`, `sendUserTurn()` on `RemoteConnection`; `Bound` connection map keyed on
+  orchestrator URL; `toWebSocketURL` takes `sessionID`.
+- `packages/opencode/src/session/llm/remote-stream.ts` — routes its user turn through
+  `sendUserTurn` so the V1 prompt path picks up redirects too.
+- `packages/tui/src/component/dialog-agent.tsx` — participant entries gated on `addressable`.
+- `packages/core/test/session-runner-remote-switch.test.ts` — new; drives the real
+  `openConnection` against a live WebSocket stub.
+
+### Verified
+
+Against a rebuilt container and a live Phoenix:
+
+- Manifest reports `pattern: handoff`, `context_scope: shared`, `multi_turn: true`,
+  `addressable: true`.
+- Over one socket: turn 1 mentions invoice `INV-4471` to `triage`; a participant switch to
+  `refunds` is folded into turn 2; `refunds` answers turn 3 and still knows the invoice number.
+- Before the compliance fix the same probe left `billing` answering; after it, `refunds` does.
+- Phoenix span `turn support/triage→billing→refunds→billing` with
+  `maf.agents.engaged`, `maf.agent.responding`, `maf.orchestrator.pattern` and a `session.id`
+  Phoenix groups on.
+- With the default settings, 0 spans contain the probe text.
+- 9 bridge tests, 2 new core tests, 6 opencode remote tests pass; core/opencode/tui typecheck.
+
+### Deviation
+
+The participant redirect is advisory. MAF decides handoffs through the active agent's own tool
+call, so the bridge cannot force a specific agent to become the responder — it can only make the
+request unambiguous, which the strengthened instruction does. The same limitation already
+applies to `steer_to_agent` (WS9).
