@@ -101,6 +101,7 @@ ServerFrame = Annotated[
 class Participant(BaseModel):
     id: str
     name: str
+    description: str = ""
 
 
 class OrchestratorManifestEntry(BaseModel):

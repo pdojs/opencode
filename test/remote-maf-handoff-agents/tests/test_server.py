@@ -169,7 +169,10 @@ def test_manifest_shape() -> None:
                 "id": "demo",
                 "name": "Demo",
                 "description": "two-agent handoff fixture",
-                "participants": [{"id": "alpha", "name": "alpha"}, {"id": "beta", "name": "beta"}],
+                "participants": [
+                    {"id": "alpha", "name": "alpha", "description": ""},
+                    {"id": "beta", "name": "beta", "description": ""},
+                ],
             }
         ]
     }

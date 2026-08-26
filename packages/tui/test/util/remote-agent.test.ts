@@ -6,6 +6,15 @@ describe("util.remoteAgent", () => {
     expect(parseRemoteWorkspaceID("remote:demo-bridge:support")).toEqual({
       serverID: "demo-bridge",
       orchestratorID: "support",
+      participantID: undefined,
+    })
+  })
+
+  test("parses the optional participant segment addressing one agent in the network", () => {
+    expect(parseRemoteWorkspaceID("remote:demo-bridge:support:refunds")).toEqual({
+      serverID: "demo-bridge",
+      orchestratorID: "support",
+      participantID: "refunds",
     })
   })
 
@@ -16,6 +25,8 @@ describe("util.remoteAgent", () => {
     // handling rather than treating a broken value as a remote binding.
     expect(parseRemoteWorkspaceID("remote:demo-bridge")).toBeUndefined()
     expect(parseRemoteWorkspaceID("remote::support")).toBeUndefined()
+    expect(parseRemoteWorkspaceID("remote:demo-bridge:support:")).toBeUndefined()
+    expect(parseRemoteWorkspaceID("remote:demo-bridge:support:refunds:extra")).toBeUndefined()
   })
 
   /**

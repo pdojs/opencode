@@ -11,7 +11,7 @@ import { parseRemoteWorkspaceID } from "../util/remote-agent"
 
 type AgentOption =
   | { type: "local"; name: string }
-  | { type: "remote"; serverID: string; orchestratorID: string; name: string }
+  | { type: "remote"; serverID: string; orchestratorID: string; participantID?: string; name: string }
 
 export function DialogAgent() {
   const local = useLocal()
@@ -34,18 +34,35 @@ export function DialogAgent() {
       category: item.native ? "Native" : "Workspace",
     }))
 
+    // Every agent in the network is individually addressable: the orchestrator entry enters at
+    // its default start agent, and each participant entry starts the conversation at that agent.
+    // Handoffs still apply from wherever the conversation begins.
     const remote = (remoteServers() ?? []).flatMap((server) =>
-      (server.manifest?.orchestrators ?? []).map((orchestrator) => ({
-        value: {
-          type: "remote",
-          serverID: server.id,
-          orchestratorID: orchestrator.id,
-          name: orchestrator.name,
-        } as AgentOption,
-        title: orchestrator.name,
-        description: orchestrator.description || `remote · ${server.id}`,
-        category: "Remote",
-      })),
+      (server.manifest?.orchestrators ?? []).flatMap((orchestrator) => [
+        {
+          value: {
+            type: "remote",
+            serverID: server.id,
+            orchestratorID: orchestrator.id,
+            name: orchestrator.name,
+          } as AgentOption,
+          title: orchestrator.name,
+          description: orchestrator.description || `remote · ${server.id}`,
+          category: `Remote · ${orchestrator.name}`,
+        },
+        ...(orchestrator.participants ?? []).map((participant) => ({
+          value: {
+            type: "remote",
+            serverID: server.id,
+            orchestratorID: orchestrator.id,
+            participantID: participant.id,
+            name: participant.name,
+          } as AgentOption,
+          title: participant.name,
+          description: participant.description || `remote · ${orchestrator.name}`,
+          category: `Remote · ${orchestrator.name}`,
+        })),
+      ]),
     )
 
     return [...local_, ...remote]
@@ -64,7 +81,8 @@ export function DialogAgent() {
       (opt) =>
         opt.value.type === "remote" &&
         opt.value.serverID === parsed.serverID &&
-        opt.value.orchestratorID === parsed.orchestratorID,
+        opt.value.orchestratorID === parsed.orchestratorID &&
+        opt.value.participantID === parsed.participantID,
     )?.value
   })
 
@@ -110,6 +128,7 @@ export function DialogAgent() {
             sessionID,
             serverID: option.value.serverID,
             orchestratorID: option.value.orchestratorID,
+            participantID: option.value.participantID,
           })
           .catch((err) => ({ data: undefined, error: err }))
 

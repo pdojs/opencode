@@ -10,8 +10,8 @@ that Demo 3's `steer_to_agent` nudge (test-requirements.md row 12) is reliably o
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from agent_framework import tool
@@ -72,13 +72,24 @@ class OrchestratorSpec:
     # `start_agent` selects which participant the conversation begins with; None uses the
     # workflow's own default. Lets a client address any agent in the network directly.
     build: Callable[[RunLocalCommand, str | None], Workflow]
+    # Human-readable name/description per participant id, surfaced in the manifest so a client
+    # can list and address every agent in the network individually. Ids missing here fall back
+    # to the id itself as the name.
+    participant_details: Mapping[str, tuple[str, str]] = field(default_factory=dict)
 
     def manifest_entry(self) -> OrchestratorManifestEntry:
         return OrchestratorManifestEntry(
             id=self.id,
             name=self.name,
             description=self.description,
-            participants=[Participant(id=pid, name=pid) for pid in self.participant_ids],
+            participants=[
+                Participant(
+                    id=pid,
+                    name=self.participant_details.get(pid, (pid, ""))[0],
+                    description=self.participant_details.get(pid, (pid, ""))[1],
+                )
+                for pid in self.participant_ids
+            ],
         )
 
 
@@ -145,6 +156,11 @@ SAMPLE_SUPPORT_ORCHESTRATOR = OrchestratorSpec(
     name="Support Triage",
     description="Support triage handoff group: triage, billing, refunds",
     participant_ids=("triage", "billing", "refunds"),
+    participant_details={
+        "triage": ("Triage", "Front-line support: understands the need and hands off"),
+        "billing": ("Billing", "Invoices, charges, and payment methods"),
+        "refunds": ("Refunds", "Refund requests and refund policy"),
+    },
     build=_build_sample_support_workflow,
 )
 

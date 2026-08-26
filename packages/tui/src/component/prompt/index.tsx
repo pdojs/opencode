@@ -1476,7 +1476,7 @@ export function Prompt(props: PromptProps) {
                         {store.mode === "shell"
                           ? "Shell"
                           : remoteAgent()
-                            ? Locale.titlecase(remoteAgent()!.orchestratorID)
+                            ? Locale.titlecase(remoteAgent()!.participantID ?? remoteAgent()!.orchestratorID)
                             : Locale.titlecase(local.agent.current()!.name)}
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>

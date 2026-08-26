@@ -10,5 +10,5 @@ export function parseRemoteWorkspaceID(workspaceID: string | undefined) {
   const [, serverID, orchestratorID, participantID, ...extra] = workspaceID.split(":")
   if (!serverID || !orchestratorID || extra.length > 0) return undefined
   if (participantID === "") return undefined
-  return { serverID, orchestratorID, participantID }
+  return { serverID, orchestratorID, participantID: participantID as string | undefined }
 }

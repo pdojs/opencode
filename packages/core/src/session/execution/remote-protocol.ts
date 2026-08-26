@@ -76,6 +76,7 @@ export type ServerFrame = typeof ServerFrame.Type
 export class Participant extends Schema.Class<Participant>("RemoteProtocol.Participant")({
   id: Schema.String,
   name: Schema.String,
+  description: Schema.optional(Schema.String),
 }) {}
 
 export class OrchestratorManifestEntry extends Schema.Class<OrchestratorManifestEntry>(
