@@ -19,7 +19,10 @@ const NAME_MAP: Readonly<Record<string, string>> = {
   run_local_command: "bash",
 }
 
-const translateInput = (localName: string, remoteArguments: Readonly<Record<string, unknown>>): unknown => {
+/** Resolves a remote tool name to its vetted local equivalent, or undefined if unmapped. */
+export const localName = (remoteName: string): string | undefined => NAME_MAP[remoteName]
+
+export const translateInput = (localName: string, remoteArguments: Readonly<Record<string, unknown>>): unknown => {
   switch (localName) {
     case "bash":
       return { command: remoteArguments.command }
@@ -55,8 +58,8 @@ export const execute = Effect.fn("RemoteToolBridge.execute")(function* (input: {
   readonly name: string
   readonly arguments: Readonly<Record<string, unknown>>
 }) {
-  const localName = NAME_MAP[input.name]
-  if (!localName)
+  const local = NAME_MAP[input.name]
+  if (!local)
     return { result: { type: "error" as const, value: `Unsupported remote tool call: ${input.name}` } }
 
   const materialization = yield* input.registry.materialize()
@@ -67,8 +70,8 @@ export const execute = Effect.fn("RemoteToolBridge.execute")(function* (input: {
     call: {
       type: "tool-call",
       id: input.callID,
-      name: localName,
-      input: translateInput(localName, input.arguments),
+      name: local,
+      input: translateInput(local, input.arguments),
     },
   })
 })
