@@ -27,10 +27,16 @@ RunLocalCommand = Callable[[str], Awaitable[str]]
 # `steer_to_agent` nudge (design-proposal.md WS1) is honored whenever it's on-topic for the
 # agent to comply with. This does not make steering a hard override — see test-requirements.md
 # Demo 3 row 14 for the documented negative case.
+# Unconditional on purpose. The client turns a participant switch in its agent picker into an
+# explicit named handoff request in the user turn, so this is a direct user directive about who
+# they want to talk to — not a hint the agent should weigh against its own view of the request.
+# An earlier "unless clearly irrelevant" escape hatch caused agents to keep answering questions
+# they judged to be in their own lane, so a picked agent never became the responder.
 _HANDOFF_COMPLIANCE_INSTRUCTION = (
     "If the user explicitly asks to be transferred or handed off to a specific colleague by "
-    "name, comply by handing off to them, unless doing so would be clearly irrelevant to their "
-    "request."
+    "name, hand off to them immediately, before answering anything else. Do not answer the "
+    "request yourself first, and do not decide on the user's behalf that you are the better "
+    "fit. The user chooses who they talk to."
 )
 
 # Every sample agent is given the workspace tool, so state plainly that it exists and is real —
