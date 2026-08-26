@@ -9,6 +9,7 @@ that Demo 3's `steer_to_agent` nudge (test-requirements.md row 12) is reliably o
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated
@@ -92,7 +93,9 @@ def make_run_local_command_tool(run_local_command: RunLocalCommand):
 def _build_sample_support_workflow(run_local_command: RunLocalCommand) -> Workflow:
     local_command_tool = make_run_local_command_tool(run_local_command)
 
-    client = OpenAIChatClient()
+    # Defaults to a low-cost chat model for manual/demo runs (overridable via OPENAI_CHAT_MODEL)
+    # — OpenAIChatClient() has no built-in default and raises SettingNotFoundError without one.
+    client = OpenAIChatClient(model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
     triage = client.as_agent(instructions=_TRIAGE_INSTRUCTIONS, name="triage", tools=[local_command_tool])
     billing = client.as_agent(instructions=_BILLING_INSTRUCTIONS, name="billing", tools=[local_command_tool])
     refunds = client.as_agent(instructions=_REFUNDS_INSTRUCTIONS, name="refunds", tools=[local_command_tool])

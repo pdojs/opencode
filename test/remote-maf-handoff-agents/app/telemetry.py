@@ -28,7 +28,7 @@ def configure_telemetry() -> None:
     if not endpoint:
         return
 
-    from openinference.instrumentation.agent_framework import AgentFrameworkInstrumentor
+    from openinference.instrumentation.agent_framework import AgentFrameworkToOpenInferenceProcessor
     from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -37,7 +37,13 @@ def configure_telemetry() -> None:
 
     resource = Resource.create({SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "remote-maf-handoff-bridge")})
     provider = TracerProvider(resource=resource)
+    # Order matters: `AgentFrameworkToOpenInferenceProcessor` rewrites each span's attributes
+    # from agent-framework's native GenAI semconv into OpenInference's on `on_end`, so it must
+    # run before the batch/export processor picks up the (now-mutated) span to send to Phoenix.
+    # agent_framework's own instrumentation is enabled by default and emits spans via whatever
+    # TracerProvider `trace.set_tracer_provider` installs below — there is no separate
+    # `Instrumentor().instrument(...)` call for it (unlike openinference's OpenAI/LangChain
+    # instrumentors); the package here only ships this span-attribute-translating processor.
+    provider.add_span_processor(AgentFrameworkToOpenInferenceProcessor())
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
     trace.set_tracer_provider(provider)
-
-    AgentFrameworkInstrumentor().instrument(tracer_provider=provider)
