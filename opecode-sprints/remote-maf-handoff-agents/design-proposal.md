@@ -187,6 +187,46 @@ Implementation status note for the full rationale):
 - `packages/core/src/session/execution/remote.ts` (from WS2) — wire in the bridge on `tool_call` frame receipt.
 - `packages/opencode/src/tool/registry.ts` — expose a lookup function usable by the bridge to resolve a `Tool.Def` by name outside the normal per-agent assembly path (small addition, not a rewrite).
 
+**Specific change surface** — **as implemented** (superseding the plan above; see `wbs.md`'s
+Implementation status note for the full rationale): the codebase's canonical tool
+architecture had, by the time WS3 was implemented, already moved to a newer,
+`packages/core/src/tool/*`-owned representation (`Tool.make`, `Tools.Service`,
+`ToolRegistry.Service.materialize(permissions).settle(...)`) that supersedes the
+`packages/opencode/src/tool/registry.ts` `Tool.Def`/`ExecuteResult` shape the original plan
+cited — that older shape no longer exists in this form. WS3 was built against the current
+architecture instead:
+- `packages/core/src/session/runner/remote-tool-bridge.ts` (new, **not**
+  `execution/remote-tool-bridge.ts` — same package-placement reasoning as WS2's runner; there is
+  still no second execution-layer file). Exports a `NAME_MAP` (currently `run_local_command` →
+  `bash`, matching WS1's `test/remote-maf-handoff-agents/app/orchestrator.py`'s
+  `run_local_command_tool`), an `execute()` function that resolves the mapped local tool name,
+  translates the remote tool's `arguments` record into that tool's input shape, and calls
+  `ToolRegistry.Service.materialize().settle(...)` — the exact same registry, permission gating
+  (`PermissionV2.Service`, captured inside each built-in tool's own layer at construction, per
+  `packages/core/src/tool/AGENTS.md`), and settlement path a local agent's own tool calls go
+  through, and a `resultText()` helper rendering a settled `ToolResultValue` into the plain-text
+  `output` field WS1's `tool_result` frame expects.
+- `packages/core/src/session/runner/remote.ts` — wired `ToolRegistry.Service` into the runner's
+  layer (added to `SessionRunnerRemote.node`'s `deps`, alongside the existing
+  `BuiltInTools.node`/`ToolRegistry.toolsNode` already shared by every Location per
+  `location-services.ts` — no new wiring was needed there since WS2 already scoped the runner
+  replacement to *only* swap `SessionRunnerLLM.node`, leaving tools/permissions identical between
+  local and remote Locations). `runTurn`'s `tool_call` case now publishes a synthetic
+  `LLMEvent.toolCall`/`LLMEvent.toolResult` pair through the same `createLLMEventPublisher` used
+  for text — this means the TUI's existing tool-call rendering (permission prompts, tool-result
+  cards) requires zero changes to display a remote tool call, the same "zero rendering changes"
+  win WS2 established for text.
+- No changes were needed to any `packages/opencode/src/tool/*` file — the current
+  `ToolRegistry.Service` already exposes exactly the `materialize()`/`settle()` lookup surface
+  the bridge needs; there was no separate lookup function to add.
+- `packages/core/test/remote-tool-bridge.test.ts` (new) — unit tests against a fake
+  `ToolRegistry.Interface` (not a live registry or WS server): asserts an unmapped tool name is
+  rejected without calling the registry, `run_local_command` is correctly mapped/translated to
+  `bash`'s input shape, and `resultText()` renders both string and non-string result values.
+  **Deferred, same as WS2**: no end-to-end test exercises a real `bash` execution or a real
+  permission prompt through a live WS connection — that gap remains open for WS5's compose-based
+  demo or a dedicated follow-up integration test.
+
 ---
 
 ### WS4 — agent-picker-ui

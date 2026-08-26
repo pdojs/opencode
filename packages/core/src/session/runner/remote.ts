@@ -1,6 +1,8 @@
 export * as SessionRunnerRemote from "./remote"
 
 import { Effect, Layer } from "effect"
+import { AgentV2 } from "../../agent"
+import { LLMEvent } from "@opencode-ai/llm"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
@@ -14,6 +16,8 @@ import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { RemoteProtocol } from "../execution/remote-protocol"
+import { RemoteToolBridge } from "./remote-tool-bridge"
+import { ToolRegistry } from "../../tool/registry"
 import { RemoteAgentError, Service } from "./index"
 
 /** Prefix identifying a remote-orchestrator Location, e.g. `remote:bridge-1:support`. */
@@ -147,6 +151,7 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const config = yield* Config.Service
     const db = (yield* Database.Service).db
+    const registry = yield* ToolRegistry.Service
 
     const getSession = Effect.fn("SessionRunner.remote.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
@@ -221,13 +226,33 @@ const layer = Layer.effect(
             break
           }
           case "tool_call": {
-            // Full local execution is WS3's scope; stub a rejection so the remote turn is never
-            // left hanging on a pending tool call it will never receive a result for.
+            yield* endActiveText()
+            activeAgent = undefined
+            yield* publisher.publish({ type: "tool-call", id: frame.call_id, name: frame.name, input: frame.arguments })
+            const assistantMessageID = yield* publisher.assistantMessageID(frame.call_id)
+            const settlement = yield* RemoteToolBridge.execute({
+              registry,
+              sessionID,
+              agent: AgentV2.ID.make(orchestratorID),
+              assistantMessageID,
+              callID: frame.call_id,
+              name: frame.name,
+              arguments: frame.arguments,
+            })
+            yield* publisher.publish(
+              LLMEvent.toolResult({
+                id: frame.call_id,
+                name: frame.name,
+                result: settlement.result,
+                output: settlement.output,
+              }),
+              settlement.outputPaths ?? [],
+            )
             connection.send(
               RemoteProtocol.ToolResultFrame.make({
                 type: "tool_result",
                 call_id: frame.call_id,
-                output: "error: remote tool-call bridging is not implemented yet (see WS3)",
+                output: RemoteToolBridge.resultText(settlement.result),
               }),
             )
             break
@@ -289,5 +314,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventV2.node, SessionStore.node, Location.node, Config.node, Database.node],
+  deps: [EventV2.node, SessionStore.node, Location.node, Config.node, Database.node, ToolRegistry.node],
 })

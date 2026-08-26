@@ -109,5 +109,32 @@ Deviations from the original plan, made explicitly when implementation started:
   no-connection no-op path in isolation, without a live WS integration test of `runTurn`/`run`
   end-to-end. This gap is deferred to WS5's compose-based e2e demo, or a follow-up integration
   test if higher confidence is needed before then.
-- **Next**: WS3 (`remote-tool-bridge`) — replace WS2's tool-call stub with real local execution
-  through the existing `ToolRegistry`/permission path.
+- **WS3 location deviation**: `remote-tool-bridge.ts` lives at
+  `packages/core/src/session/runner/remote-tool-bridge.ts`, not
+  `packages/core/src/session/execution/remote-tool-bridge.ts` as originally planned — same
+  reasoning as WS2's runner-location deviation (no second execution-layer file exists). It also
+  targets the *current* `packages/core/src/tool/*` canonical tool architecture
+  (`ToolRegistry.Service.materialize(permissions).settle(...)`, per
+  `packages/core/src/tool/AGENTS.md`), not the `packages/opencode/src/tool/registry.ts`
+  `Tool.Def`/`ExecuteResult` shape the original plan cited — that older shape no longer exists in
+  this form. No changes were needed in `packages/opencode/src/tool/*` at all: the current
+  registry already exposes the exact `materialize()`/`settle()` surface the bridge needs.
+- **WS3 status**: implemented on `story/remote-tool-bridge`
+  (PR: `feature/remote-maf-handoff-agents` <- `story/remote-tool-bridge`). Adds a
+  `run_local_command` → `bash` name/input mapping, wires `ToolRegistry.Service` into
+  `SessionRunnerRemote.node`'s deps, and replaces the WS2-era tool-call stub in `runTurn` with a
+  real `materialize().settle(...)` call — the same registry, permission gating
+  (`PermissionV2.Service`, captured inside each built-in tool's own layer), and settlement path a
+  local agent's own tool calls go through. The `tool_call` case now also publishes a synthetic
+  `LLMEvent.toolCall`/`LLMEvent.toolResult` pair through the same publisher used for text, so the
+  TUI's existing tool-call rendering (permission prompts, tool-result cards) needs zero changes
+  to display a remote tool call — the same "zero rendering changes" property WS2 established for
+  text. 4 new unit tests (`remote-tool-bridge.test.ts`) against a fake `ToolRegistry.Interface`
+  cover: unmapped-name rejection (without calling the registry), correct name/input mapping for
+  `run_local_command`, and both branches of `resultText()`. Full `packages/core` suite at
+  1112/1120 passing (same 8 pre-existing Mistral/xAI/Groq failures, unrelated). `bun run
+  typecheck` clean. **Deferred, same as WS2**: no end-to-end test exercises a real `bash`
+  execution or permission prompt through a live WS connection — remains open for WS5's
+  compose-based demo or a dedicated follow-up integration test.
+- **Next**: WS4 (`agent-picker-ui`) — TUI `/agent` alias, Native/Workspace/Remote grouped picker
+  sections, remote-selection binding, and the handoff/participant-status indicator.
