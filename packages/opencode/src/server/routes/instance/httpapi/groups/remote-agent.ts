@@ -26,6 +26,10 @@ export const SelectPayload = Schema.Struct({
   // Binds the session directly to one participant of the orchestrator's handoff network rather
   // than to its default start agent. Handoffs still apply from wherever the conversation begins.
   participantID: Schema.optional(Schema.String),
+  // Talks to `participantID` privately: no workflow, no handoffs, and a transcript separate from
+  // the shared network conversation. Requires a participant, since the network as a whole is not
+  // something one can talk to privately.
+  solo: Schema.optional(Schema.Boolean),
 })
 
 export const SelectResponse = Schema.Struct({
