@@ -1,6 +1,6 @@
 export * as RemoteProtocol from "./remote-protocol"
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 
 /**
  * TypeScript mirror of the wire protocol implemented by the MAF handoff bridge server at
@@ -95,10 +95,10 @@ const decodeServerFrameJSON = Schema.decodeUnknownOption(ServerFrame)
 const encodeClientFrameJSON = Schema.encodeSync(ClientFrame)
 const decodeManifestJSON = Schema.decodeUnknownOption(Manifest)
 
-/** Parses raw WS text into a ServerFrame, returning None on malformed JSON or an unrecognized shape. */
-export const decodeServerFrame = (raw: string) => {
+/** Parses raw WS text into a ServerFrame, returning undefined on malformed JSON or an unrecognized shape. */
+export const decodeServerFrame = (raw: string): ServerFrame | undefined => {
   try {
-    return decodeServerFrameJSON(JSON.parse(raw))
+    return Option.getOrUndefined(decodeServerFrameJSON(JSON.parse(raw)))
   } catch {
     return undefined
   }
@@ -107,5 +107,5 @@ export const decodeServerFrame = (raw: string) => {
 /** Serializes a ClientFrame to the JSON text sent over the WS connection. */
 export const encodeClientFrame = (frame: ClientFrame) => JSON.stringify(encodeClientFrameJSON(frame))
 
-/** Parses the `GET /agents/manifest` JSON response body. */
-export const decodeManifest = (raw: unknown) => decodeManifestJSON(raw)
+/** Parses the `GET /agents/manifest` JSON response body, returning undefined if malformed. */
+export const decodeManifest = (raw: unknown): Manifest | undefined => Option.getOrUndefined(decodeManifestJSON(raw))
