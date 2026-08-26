@@ -71,6 +71,13 @@ export function DialogAgent() {
     return [...local_, ...remote]
   })
 
+  // Raw binding check, independent of `options()` below: whether the session should be released
+  // does not depend on the manifest still listing the orchestrator it is bound to.
+  const remoteBinding = createMemo(() => {
+    if (route.data.type !== "session") return undefined
+    return parseRemoteWorkspaceID(sync.session.get(route.data.sessionID)?.workspaceID)
+  })
+
   // Reflects the active session's remote binding (if any) so the dialog highlights the
   // currently-selected remote orchestrator the same way it highlights a local agent. Looked up
   // against `options()` (not synthesized directly) so it deep-equals the matching option's
@@ -102,6 +109,25 @@ export function DialogAgent() {
       onSelect={async (option) => {
         if (option.value.type === "local") {
           local.agent.set(option.value.name)
+          // A remote-bound session keeps routing to the bridge no matter which local agent is
+          // named, since routing follows the session's Location and not the agent label. Picking
+          // a local agent is the user saying they want the local runner back, so unbind.
+          if (remoteBinding()) {
+            const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+            if (sessionID) {
+              const result = await sdk.client.experimental.remoteAgent
+                .release({ sessionID })
+                .catch((err) => ({ data: undefined, error: err }))
+              if (!result.data) {
+                toast.show({
+                  variant: "error",
+                  title: "Failed to leave remote agent",
+                  message: errorMessage(result.error),
+                })
+                return
+              }
+            }
+          }
           dialog.clear()
           return
         }
