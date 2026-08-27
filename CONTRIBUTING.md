@@ -156,9 +156,11 @@ on Windows are wrong for WSL too. Delete the directory and reinstall from within
 There is no `build` script at the repo root; it lives in `packages/opencode`. Either `cd
 packages/opencode` first, or run `bun run --cwd packages/opencode build` from the root.
 
-Note that the build script only inspects `process.argv` for the flags it knows about, so
-misspelled or unsupported flags are ignored silently rather than rejected. If a build produces
-more targets than you expected, check the flag spelling.
+**Unknown flags**
+
+The build script rejects flags it does not recognise and lists the available ones, so a typo like
+`--singel` or the space-separated `--os linux` fails immediately rather than silently building
+something else.
 
 **`error: preload not found "@opentui/solid/preload"`**
 

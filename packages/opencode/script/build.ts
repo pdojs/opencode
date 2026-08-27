@@ -32,6 +32,22 @@ const flagValue = (name: string) =>
 const osFilter = normalizeOS(flagValue("os"))
 const archFilter = flagValue("arch")
 
+// Flags are matched by scanning argv, so an unrecognised one would otherwise be ignored and
+// silently produce a build the caller did not ask for -- a misspelled `--os` builds every target.
+const booleanFlags = ["--single", "--baseline", "--skip-install", "--sourcemaps", "--skip-embed-web-ui"]
+const valueFlags = ["--os", "--arch"]
+const unknownFlags = process.argv
+  .slice(2)
+  .filter((item) => item.startsWith("--"))
+  .filter((item) => !booleanFlags.includes(item) && !valueFlags.some((flag) => item.startsWith(`${flag}=`)))
+if (unknownFlags.length) {
+  console.error(
+    `Unknown flag${unknownFlags.length === 1 ? "" : "s"}: ${unknownFlags.join(", ")}. ` +
+      `Available flags: ${[...booleanFlags, ...valueFlags.map((flag) => `${flag}=<value>`)].join(", ")}`,
+  )
+  process.exit(1)
+}
+
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
