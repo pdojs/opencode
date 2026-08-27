@@ -128,6 +128,56 @@ dependency installs.
 
 Cross-compiling works from Windows too, so you can produce Linux binaries without a VM.
 
+### Building under WSL
+
+WSL is Linux, so `--single` already produces a native `linux-x64` binary — you do not need
+`--os=linux` or any cross-compilation:
+
+```bash
+cd packages/opencode
+bun run build --single
+```
+
+Keep the checkout inside the WSL filesystem (`~/projects/opencode`) rather than under
+`/mnt/c/...`. Bun's installer links workspace packages with a farm of relative symlinks, and
+symlink support on `/mnt/c` depends on how the drive is mounted; a partial failure there shows up
+later as the preload error below. It is also much faster.
+
+Do not reuse a `node_modules` produced by a Windows-side `bun install`. The root `postinstall`
+runs `packages/core/script/fix-node-pty.ts`, whose body is guarded by
+`if (process.platform !== "win32")` — installing from Windows skips it entirely, so `node-pty`'s
+`spawn-helper` binaries never get their executable bit. The native optional dependencies resolved
+on Windows are wrong for WSL too. Delete the directory and reinstall from within WSL.
+
+### Build troubleshooting
+
+**`error: Script not found "build"`**
+
+There is no `build` script at the repo root; it lives in `packages/opencode`. Either `cd
+packages/opencode` first, or run `bun run --cwd packages/opencode build` from the root.
+
+Note that the build script only inspects `process.argv` for the flags it knows about, so
+misspelled or unsupported flags are ignored silently rather than rejected. If a build produces
+more targets than you expected, check the flag spelling.
+
+**`error: preload not found "@opentui/solid/preload"`**
+
+`packages/opencode/bunfig.toml` sets a top-level `preload`, so Bun loads `@opentui/solid` for
+every JS process started in that directory, including the build. This error means dependencies
+are missing or only partly installed. Bun reports it only when a `node_modules` directory exists
+but the package cannot be resolved inside it — with no `node_modules` at all the preload is
+skipped silently, so the error is a reliable sign of a broken tree rather than an empty one.
+
+Reinstall from the **repo root**, not from `packages/opencode` — this is a Bun workspace, and the
+package store plus every per-package symlink is created from the root:
+
+```bash
+rm -rf node_modules packages/*/node_modules
+bun install
+```
+
+`packages/cli` and `packages/tui` set the same preload and fail the same way.
+
 ### Understanding bun dev vs opencode
 
 During development, `bun dev` is the local equivalent of the built `opencode` command. Both run the same CLI interface:
