@@ -1921,6 +1921,7 @@ export type Config = {
         },
       ]
   >
+  remote_agent?: ConfigV2RemoteAgent
   share?: "manual" | "auto" | "disabled"
   autoshare?: boolean
   /**
@@ -2537,6 +2538,21 @@ export type ProviderAuthError1 = {
     field?: string
     message?: string
     kind?: string
+  }
+}
+
+export type RemoteAgentServerEntry = {
+  id: string
+  url: string
+  disabled: boolean
+  manifest?: RemoteProtocolManifest
+  error?: string
+}
+
+export type RemoteAgentServerNotFoundError = {
+  name: "RemoteAgentServerNotFoundError"
+  data: {
+    message: string
   }
 }
 
@@ -3836,6 +3852,23 @@ export type ConfigV2ReferenceLocal = {
   hidden?: boolean
 }
 
+export type ConfigV2RemoteAgentServer = {
+  /**
+   * Stable identifier used to address this server as remote:<id>:<orchestratorID>
+   */
+  id: string
+  /**
+   * Base HTTP(S) URL of the remote agent bridge server, e.g. http://localhost:8000
+   */
+  url: string
+  timeout?: number
+  disabled?: boolean
+}
+
+export type ConfigV2RemoteAgent = {
+  servers?: Array<ConfigV2RemoteAgentServer>
+}
+
 export type PolicyEffect = "allow" | "deny"
 
 export type ConfigV2ExperimentalPolicy = {
@@ -3852,6 +3885,27 @@ export type ProjectDirectories = Array<{
 export type PtyTicketConnectToken = {
   ticket: string
   expires_in: number
+}
+
+export type RemoteProtocolParticipant = {
+  id: string
+  name: string
+  description?: string
+}
+
+export type RemoteProtocolOrchestratorManifestEntry = {
+  id: string
+  name: string
+  description: string
+  participants: Array<RemoteProtocolParticipant>
+  pattern?: string
+  context_scope?: "shared" | "scoped" | "isolated"
+  multi_turn?: boolean
+  addressable?: boolean
+}
+
+export type RemoteProtocolManifest = {
+  orchestrators: Array<RemoteProtocolOrchestratorManifestEntry>
 }
 
 export type WorkspaceEventConnectionStatus = {
@@ -9435,6 +9489,146 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type ExperimentalRemoteAgentListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent"
+}
+
+export type ExperimentalRemoteAgentListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalRemoteAgentListError =
+  ExperimentalRemoteAgentListErrors[keyof ExperimentalRemoteAgentListErrors]
+
+export type ExperimentalRemoteAgentListResponses = {
+  /**
+   * Configured remote agent servers with live manifests
+   */
+  200: Array<RemoteAgentServerEntry>
+}
+
+export type ExperimentalRemoteAgentListResponse =
+  ExperimentalRemoteAgentListResponses[keyof ExperimentalRemoteAgentListResponses]
+
+export type ExperimentalRemoteAgentSelectData = {
+  body?: {
+    sessionID: string
+    serverID: string
+    orchestratorID: string
+    participantID?: string
+    solo?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent/select"
+}
+
+export type ExperimentalRemoteAgentSelectErrors = {
+  /**
+   * RemoteAgentServerNotFoundError | BadRequest | InvalidRequestError
+   */
+  400: RemoteAgentServerNotFoundError | EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalRemoteAgentSelectError =
+  ExperimentalRemoteAgentSelectErrors[keyof ExperimentalRemoteAgentSelectErrors]
+
+export type ExperimentalRemoteAgentSelectResponses = {
+  /**
+   * Session bound to remote agent
+   */
+  200: {
+    sessionID: string
+    workspaceID: string
+  }
+}
+
+export type ExperimentalRemoteAgentSelectResponse =
+  ExperimentalRemoteAgentSelectResponses[keyof ExperimentalRemoteAgentSelectResponses]
+
+export type ExperimentalRemoteAgentReleaseData = {
+  body?: {
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent/release"
+}
+
+export type ExperimentalRemoteAgentReleaseErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalRemoteAgentReleaseError =
+  ExperimentalRemoteAgentReleaseErrors[keyof ExperimentalRemoteAgentReleaseErrors]
+
+export type ExperimentalRemoteAgentReleaseResponses = {
+  /**
+   * Session returned to its local Location
+   */
+  200: {
+    sessionID: string
+    workspaceID?: string
+    released: boolean
+  }
+}
+
+export type ExperimentalRemoteAgentReleaseResponse =
+  ExperimentalRemoteAgentReleaseResponses[keyof ExperimentalRemoteAgentReleaseResponses]
+
+export type ExperimentalRemoteAgentSteerData = {
+  body?: {
+    sessionID: string
+    agentID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/remote-agent/steer"
+}
+
+export type ExperimentalRemoteAgentSteerErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalRemoteAgentSteerError =
+  ExperimentalRemoteAgentSteerErrors[keyof ExperimentalRemoteAgentSteerErrors]
+
+export type ExperimentalRemoteAgentSteerResponses = {
+  /**
+   * Steer frame delivery result
+   */
+  200: {
+    delivered: boolean
+  }
+}
+
+export type ExperimentalRemoteAgentSteerResponse =
+  ExperimentalRemoteAgentSteerResponses[keyof ExperimentalRemoteAgentSteerResponses]
 
 export type SessionListData = {
   body?: never

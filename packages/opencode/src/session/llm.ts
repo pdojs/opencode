@@ -29,6 +29,8 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { LLMRemoteStream } from "./llm/remote-stream"
+import { SessionRunnerRemote } from "@opencode-ai/core/session/runner/remote"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +47,12 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  /**
+   * Set when the Session is bound to a remote MAF orchestrator. Substitutes the provider call
+   * with a bridge-backed LLMEvent stream so the rest of the V1 loop — tool execution, part
+   * persistence, steering, abort, TUI rendering — is identical for remote and local Sessions.
+   */
+  remote?: LLMRemoteStream.Target
 }
 
 export type StreamRequest = StreamInput & {
@@ -355,34 +363,61 @@ const live: Layer.Layer<
     })
 
     const stream: Interface["stream"] = (input) =>
-      Stream.scoped(
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const ctrl = yield* Effect.acquireRelease(
-              Effect.sync(() => new AbortController()),
-              (ctrl) => Effect.sync(() => ctrl.abort()),
-            )
+      input.remote
+        ? Stream.unwrap(
+            Effect.gen(function* () {
+              const target = input.remote!
+              return LLMRemoteStream.stream({
+                sessionID: input.sessionID,
+                target,
+                text: latestUserText(input.messages),
+                tools: input.tools,
+                baseURL: yield* SessionRunnerRemote.serverURLFromConfig(yield* config.get(), target.serverID),
+              })
+            }),
+          )
+        : Stream.scoped(
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const ctrl = yield* Effect.acquireRelease(
+                Effect.sync(() => new AbortController()),
+                (ctrl) => Effect.sync(() => ctrl.abort()),
+              )
 
-            const result = yield* run({ ...input, abort: ctrl.signal })
+              const result = yield* run({ ...input, abort: ctrl.signal })
 
-            if (result.type === "native") return result.stream
+              if (result.type === "native") return result.stream
 
-            // Adapter seam: both runtimes expose the same LLMEvent stream. Native
-            // already returns one; AI SDK streams are converted here.
-            const state = LLMAISDK.adapterState()
-            return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
-              e instanceof Error ? e : new Error(String(e)),
-            ).pipe(
-              Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
-              Stream.flatMap((events) => Stream.fromIterable(events)),
-            )
-          }),
-        ),
-      )
+              // Adapter seam: both runtimes expose the same LLMEvent stream. Native
+              // already returns one; AI SDK streams are converted here.
+              const state = LLMAISDK.adapterState()
+              return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
+                e instanceof Error ? e : new Error(String(e)),
+              ).pipe(
+                Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
+                Stream.flatMap((events) => Stream.fromIterable(events)),
+              )
+            }),
+          ),
+        )
 
     return Service.of({ stream })
   }),
 )
+
+/**
+ * The remote bridge takes a plain prompt string rather than a message history — the MAF
+ * orchestrator keeps its own conversation state on the open socket — so only the newest user
+ * turn is forwarded.
+ */
+function latestUserText(messages: ReadonlyArray<ModelMessage>) {
+  const last = messages.findLast((message) => message.role === "user")
+  if (!last) return ""
+  if (typeof last.content === "string") return last.content
+  return last.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+}
 
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
 

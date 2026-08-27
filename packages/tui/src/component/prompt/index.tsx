@@ -24,6 +24,7 @@ import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { parseRemoteWorkspaceID } from "../../util/remote-agent"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -973,8 +974,15 @@ export function Prompt(props: PromptProps) {
 
     const workspaceSession = props.sessionID ? sync.session.get(props.sessionID) : undefined
     const workspaceID = workspaceSession?.workspaceID
+    // A remote-agent binding stores a `remote:<server>:<orchestrator>` sentinel in workspaceID
+    // rather than a real workspace, and is deliberately kept out of the workspace registry
+    // server-side. Without this guard `status()` returns undefined for it, which reads as an
+    // unavailable workspace and pushes the user into the restore flow — whose "use the local
+    // project" branch warps the session to workspaceID null, silently undoing the remote
+    // agent selection.
+    const remote = parseRemoteWorkspaceID(workspaceID)
     const workspaceStatus = workspaceID ? (project.workspace.status(workspaceID) ?? "error") : undefined
-    if (props.sessionID && workspaceID && workspaceStatus !== "connected") {
+    if (!remote && props.sessionID && workspaceID && workspaceStatus !== "connected") {
       dialog.replace(() => (
         <DialogWorkspaceUnavailable
           onRestore={() => {
@@ -1285,9 +1293,20 @@ export function Prompt(props: PromptProps) {
     setStore("extmarkToPartIndex", new Map())
   }
 
+  // A remote-agent binding replaces the session's actual "who's running" identity — the
+  // remote runner ignores the local agent/model entirely (packages/core/src/session/runner/
+  // remote.ts's run() dispatches purely off Location.workspaceID) — so the status bar must
+  // reflect the bound orchestrator, not whatever local agent happens to be selected.
+  const remoteAgent = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return undefined
+    return parseRemoteWorkspaceID(sync.session.get(sessionID)?.workspaceID)
+  })
+
   const highlight = createMemo(() => {
     if (leader()) return theme.border
     if (store.mode === "shell") return theme.primary
+    if (remoteAgent()) return theme.info
     const agent = local.agent.current()
     if (!agent) return theme.border
     return local.agent.color(agent.name)
@@ -1320,6 +1339,13 @@ export function Prompt(props: PromptProps) {
   })
 
   const spinnerDef = createMemo(() => {
+    if (remoteAgent()) {
+      const color = theme.info
+      return {
+        frames: createFrames({ color, style: "blocks", inactiveFactor: 0.6, minAlpha: 0.3 }),
+        color: createColors({ color, style: "blocks", inactiveFactor: 0.6, minAlpha: 0.3 }),
+      }
+    }
     const agent =
       status().type !== "idle"
         ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
@@ -1443,11 +1469,15 @@ export function Prompt(props: PromptProps) {
             />
             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
               <box flexDirection="row" gap={1}>
-                <Show when={local.agent.current()} fallback={<box height={1} />}>
-                  {(agent) => (
+                <Show when={!!(remoteAgent() || local.agent.current())} fallback={<box height={1} />}>
+                  {(_item) => (
                     <>
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
+                        {store.mode === "shell"
+                          ? "Shell"
+                          : remoteAgent()
+                            ? Locale.titlecase(remoteAgent()!.participantID ?? remoteAgent()!.orchestratorID)
+                            : Locale.titlecase(local.agent.current()!.name)}
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
                         <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>

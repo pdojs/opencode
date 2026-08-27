@@ -40,6 +40,14 @@ import type {
   ExperimentalControlPlaneMoveSessionResponses,
   ExperimentalProjectCopyGenerateNameErrors,
   ExperimentalProjectCopyGenerateNameResponses,
+  ExperimentalRemoteAgentListErrors,
+  ExperimentalRemoteAgentListResponses,
+  ExperimentalRemoteAgentReleaseErrors,
+  ExperimentalRemoteAgentReleaseResponses,
+  ExperimentalRemoteAgentSelectErrors,
+  ExperimentalRemoteAgentSelectResponses,
+  ExperimentalRemoteAgentSteerErrors,
+  ExperimentalRemoteAgentSteerResponses,
   ExperimentalResourceListErrors,
   ExperimentalResourceListResponses,
   ExperimentalSessionBackgroundErrors,
@@ -967,6 +975,175 @@ export class ProjectCopy extends HeyApiClient {
   }
 }
 
+export class RemoteAgent extends HeyApiClient {
+  /**
+   * List remote agent servers
+   *
+   * List configured remote MAF agent bridge servers, each with its live-fetched agents manifest.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalRemoteAgentListResponses,
+      ExperimentalRemoteAgentListErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Select remote agent
+   *
+   * Bind a session's Location to the selected remote orchestrator so its next turn runs there.
+   */
+  public select<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+      serverID?: string
+      orchestratorID?: string
+      participantID?: string
+      solo?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "serverID" },
+            { in: "body", key: "orchestratorID" },
+            { in: "body", key: "participantID" },
+            { in: "body", key: "solo" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalRemoteAgentSelectResponses,
+      ExperimentalRemoteAgentSelectErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent/select",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Release remote agent
+   *
+   * Unbind a session from its remote orchestrator and return it to the local project, closing the remote connection. Ends the remote conversation: the MAF workflow lives for the lifetime of that connection and cannot be resumed.
+   */
+  public release<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalRemoteAgentReleaseResponses,
+      ExperimentalRemoteAgentReleaseErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent/release",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Steer remote agent
+   *
+   * Ask the session's remote orchestrator to hand the active turn off to a specific participant. Advisory: reports frame delivery only.
+   */
+  public steer<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+      agentID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "agentID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalRemoteAgentSteerResponses,
+      ExperimentalRemoteAgentSteerErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/remote-agent/steer",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Adapter extends HeyApiClient {
   /**
    * List workspace adapters
@@ -1269,6 +1446,11 @@ export class Experimental extends HeyApiClient {
   private _projectCopy?: ProjectCopy
   get projectCopy(): ProjectCopy {
     return (this._projectCopy ??= new ProjectCopy({ client: this.client }))
+  }
+
+  private _remoteAgent?: RemoteAgent
+  get remoteAgent(): RemoteAgent {
+    return (this._remoteAgent ??= new RemoteAgent({ client: this.client }))
   }
 
   private _workspace?: Workspace

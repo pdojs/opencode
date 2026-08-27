@@ -794,6 +794,30 @@ You can configure MCP servers you want to use through the `mcp` option.
 
 ---
 
+### Remote agents
+
+You can connect to externally-hosted agent backends through the `remote_agent` option. Each server is a bridge exposing one or more orchestrators, which then appear under **Remote** in the `/agent` picker alongside your local agents.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "remote_agent": {
+    "servers": [{ "id": "demo-bridge", "url": "http://localhost:8000" }]
+  }
+}
+```
+
+- `id` - Stable identifier used to address the server as `remote:<id>:<orchestratorID>`.
+- `url` - Base HTTP(S) URL of the bridge server.
+- `timeout` - Milliseconds to wait for the manifest fetch or for a turn to start streaming (optional).
+- `disabled` - Skip this server without removing it from your config (optional).
+
+There is no discovery: a server appears only if you list it here. OpenCode fetches each server's manifest to learn which agents it hosts, so the *agents* come from the server but the *server* is always one you named. A server that fails to respond is shown with its error rather than hidden.
+
+This option is resolved per workspace, so a project-level `opencode.json` only applies to sessions in that project. Put it in your [global config](#global) to make a server available everywhere.
+
+---
+
 ### Plugins
 
 [Plugins](/docs/plugins) extend OpenCode with custom tools, hooks, and integrations.
