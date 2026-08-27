@@ -15,7 +15,7 @@ You can switch between agents during a session or invoke them with the `@` menti
 
 ## Types
 
-There are two types of agents in OpenCode; primary agents and subagents.
+There are two types of agents in OpenCode; primary agents and subagents. Both are normally defined locally, but primary agents can also be [hosted remotely](#remote-agents).
 
 ---
 
@@ -37,6 +37,14 @@ look at these below.
 Subagents are specialized assistants that primary agents can invoke for specific tasks. You can also manually invoke them by **@ mentioning** them in your messages.
 
 OpenCode comes with three built-in subagents, **General**, **Explore**, and **Scout**. We'll look at this below.
+
+---
+
+### Remote agents
+
+Primary agents can also run on an external bridge server rather than locally — for example, a containerized agent workflow. Configure the server under [`remote_agent`](/docs/config#remote-agents) and its agents appear under **Remote** in the agent picker.
+
+Selecting one attaches the session to that server for the rest of the conversation, so its turns run remotely. Tools it invokes are still executed locally, subject to your usual [permissions](/docs/permissions).
 
 ---
 
