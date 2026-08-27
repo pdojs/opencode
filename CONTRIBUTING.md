@@ -61,6 +61,17 @@ To compile a standalone executable:
 ./packages/opencode/script/build.ts --single
 ```
 
+Or equivalently, via the package script (this form also works on Windows, where the shebang
+above does not):
+
+```bash
+cd packages/opencode
+bun run build --single
+```
+
+Flags pass straight through `bun run build`; no `--` separator is needed. Note there is no
+build script at the repo root, so you must `cd packages/opencode` first.
+
 Then run it with:
 
 ```bash
@@ -68,6 +79,47 @@ Then run it with:
 ```
 
 Replace `<platform>` with your platform (e.g., `darwin-arm64`, `linux-x64`).
+
+### Cross-compiling
+
+Omitting `--single` builds **all** supported targets — Linux, macOS, and Windows, including musl
+and baseline variants — from whatever machine you are on. Bun downloads each target's runtime, so
+no VM or container is needed:
+
+```bash
+./packages/opencode/script/build.ts
+```
+
+This is how releases are produced: `.github/workflows/publish.yml` builds every target on a Linux
+runner, and the Windows runner only signs the resulting `.exe`. Useful flags:
+
+- `--single` — only your host platform.
+- `--os=<os>` / `--arch=<arch>` — narrow the cross-build to a subset, e.g. `--os=linux` or
+  `--os=linux --arch=x64`. Unlike `--single` these are independent of the host, so you can build
+  just the Linux binaries from macOS or Windows.
+- `--skip-embed-web-ui` — skip building `packages/app` into the binary. Much faster for
+  iterating on the CLI or TUI.
+- `--skip-install` — skip re-installing the all-platform optional dependencies.
+
+Two things worth knowing:
+
+- The version is derived from your current git branch, so a branch name containing `/` produces
+  an invalid semver prerelease (e.g. `0.0.0-my/branch-2026...`). It builds, but the value lands
+  in each `dist/*/package.json` and will break packaging. Set `OPENCODE_VERSION` to override.
+- The musl binaries need a C++ runtime that Alpine does not ship by default. Run
+  `apk add libstdc++ libgcc` first, or you will get `Error relocating ... symbol not found`.
+
+### Building on Windows
+
+Windows is supported — unit tests run on it in CI. Use the `bun run build` form above rather
+than the shebang, and run it under **bash** (Git Bash) rather than PowerShell, which is what CI
+does.
+
+You need Bun matching the `packageManager` field in the root `package.json` (the build script
+exits if it does not match) and Node 22+ on PATH, since `node-gyp` runs during native
+dependency installs.
+
+Cross-compiling works from Windows too, so you can produce Linux binaries without a VM.
 
 - Core pieces:
   - `packages/opencode`: OpenCode core business logic & server.
