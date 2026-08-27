@@ -94,6 +94,9 @@ This is how releases are produced: `.github/workflows/publish.yml` builds every 
 runner, and the Windows runner only signs the resulting `.exe`. Useful flags:
 
 - `--single` — only your host platform.
+- `--os=<os>` / `--arch=<arch>` — narrow the cross-build to a subset, e.g. `--os=linux` or
+  `--os=linux --arch=x64`. Unlike `--single` these are independent of the host, so you can build
+  just the Linux binaries from macOS or Windows.
 - `--skip-embed-web-ui` — skip building `packages/app` into the binary. Much faster for
   iterating on the CLI or TUI.
 - `--skip-install` — skip re-installing the all-platform optional dependencies.
