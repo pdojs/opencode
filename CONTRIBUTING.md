@@ -39,6 +39,13 @@ https://github.com/anomalyco/models.dev
   bun dev
   ```
 
+- Core pieces:
+  - `packages/opencode`: OpenCode core business logic & server.
+  - `packages/opencode/src/cli/cmd/tui/`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
+  - `packages/app`: The shared web UI components, written in SolidJS
+  - `packages/desktop`: The native desktop app, built with Electron (wraps `packages/app`)
+  - `packages/plugin`: Source for `@opencode-ai/plugin`
+
 ### Running against a different directory
 
 By default, `bun dev` runs OpenCode in the `packages/opencode` directory. To run it against a different directory or repository:
@@ -120,13 +127,6 @@ exits if it does not match) and Node 22+ on PATH, since `node-gyp` runs during n
 dependency installs.
 
 Cross-compiling works from Windows too, so you can produce Linux binaries without a VM.
-
-- Core pieces:
-  - `packages/opencode`: OpenCode core business logic & server.
-  - `packages/opencode/src/cli/cmd/tui/`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
-  - `packages/app`: The shared web UI components, written in SolidJS
-  - `packages/desktop`: The native desktop app, built with Electron (wraps `packages/app`)
-  - `packages/plugin`: Source for `@opencode-ai/plugin`
 
 ### Understanding bun dev vs opencode
 
