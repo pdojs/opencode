@@ -61,6 +61,17 @@ To compile a standalone executable:
 ./packages/opencode/script/build.ts --single
 ```
 
+Or equivalently, via the package script (this form also works on Windows, where the shebang
+above does not):
+
+```bash
+cd packages/opencode
+bun run build --single
+```
+
+Flags pass straight through `bun run build`; no `--` separator is needed. Note there is no
+build script at the repo root, so you must `cd packages/opencode` first.
+
 Then run it with:
 
 ```bash
@@ -97,17 +108,15 @@ Two things worth knowing:
 
 ### Building on Windows
 
-Windows is supported — unit tests run on it in CI. Run the build under **bash** (Git Bash), not
-PowerShell, which is what CI uses. Invoke it through Bun rather than relying on the shebang:
-
-```bash
-cd packages/opencode
-bun run script/build.ts --single
-```
+Windows is supported — unit tests run on it in CI. Use the `bun run build` form above rather
+than the shebang, and run it under **bash** (Git Bash) rather than PowerShell, which is what CI
+does.
 
 You need Bun matching the `packageManager` field in the root `package.json` (the build script
 exits if it does not match) and Node 22+ on PATH, since `node-gyp` runs during native
 dependency installs.
+
+Cross-compiling works from Windows too, so you can produce Linux binaries without a VM.
 
 - Core pieces:
   - `packages/opencode`: OpenCode core business logic & server.
