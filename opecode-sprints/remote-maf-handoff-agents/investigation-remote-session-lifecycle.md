@@ -74,7 +74,7 @@ workflows for one session. The proposal therefore *weakens* the isolation it is 
 ## Finding 4 — the bridge cannot resume a conversation, but MAF can
 
 Today the MAF workflow is constructed per WebSocket in `session(...)`
-(`test/remote-maf-handoff-agents/app/server.py:57`), and `session_id` is accepted but used only
+(`remote-maf-handoff-agents/app/server.py:57`), and `session_id` is accepted but used only
 as a telemetry attribute (`app/server.py:66`, `app/server.py:160`). Dropping the socket destroys
 the workflow — the documented WS2 deviation.
 

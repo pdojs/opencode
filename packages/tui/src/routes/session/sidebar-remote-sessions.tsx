@@ -9,7 +9,7 @@ import { parseRemoteWorkspaceID } from "../../util/remote-agent"
  * left and rejoined later rather than being lost when its socket closes.
  *
  * A remote session's durable transcript lives here as an ordinary session; the agent-side half is
- * resumed from a checkpoint keyed by the same session id (see test/remote-maf-handoff-agents).
+ * resumed from a checkpoint keyed by the same session id (see remote-maf-handoff-agents).
  * Picking an entry therefore restores both sides.
  */
 export function SidebarRemoteSessions(props: { sessionID: string }) {

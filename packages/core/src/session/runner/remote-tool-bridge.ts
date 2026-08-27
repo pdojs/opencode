@@ -9,7 +9,7 @@ import { ToolRegistry } from "../../tool/registry"
 
 /**
  * Maps a remote MAF orchestrator's declared tool name (e.g. `run_local_command`, from
- * `test/remote-maf-handoff-agents/app/orchestrator.py`) to one of OpenCode's local canonical
+ * `remote-maf-handoff-agents/app/orchestrator.py`) to one of OpenCode's local canonical
  * `Tool.make`-registered names (`packages/core/src/tool/*`), and translates the remote tool's
  * argument shape into that local tool's input shape. Unmapped names are rejected below rather
  * than silently ignored or forwarded — a remote agent must not be able to invoke arbitrary local

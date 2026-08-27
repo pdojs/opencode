@@ -77,17 +77,17 @@ Four layers, from fastest/most-deterministic to slowest/most-realistic. Layers 1
 6. Write `Dockerfile` for the server. Commit: `Container: add Dockerfile for handoff bridge server`.
 
 **Specific change surface** — **as implemented** (superseding the original plan below, which
-assumed a location inside the `agent-framework` checkout): `test/remote-maf-handoff-agents/`
+assumed a location inside the `agent-framework` checkout): `remote-maf-handoff-agents/`
 inside the `opencode` repo (see `wbs.md`'s Implementation status note for why), as its own
 standalone Python app depending on published `agent-framework-*` PyPI packages rather than a
 local path dependency:
-- `test/remote-maf-handoff-agents/app/server.py` — FastAPI app, manifest + WS session, tool bridge, steer_to_agent handling.
-- `test/remote-maf-handoff-agents/app/protocol.py` — wire frame Pydantic models, shared contract WS2 will mirror in TypeScript.
-- `test/remote-maf-handoff-agents/app/orchestrator.py` — sample triage/billing/refunds HandoffBuilder workflow + manifest metadata.
-- `test/remote-maf-handoff-agents/app/telemetry.py` — OTel export to Phoenix, env-var gated.
-- `test/remote-maf-handoff-agents/app/main.py` — uvicorn ASGI entrypoint.
-- `test/remote-maf-handoff-agents/tests/test_server.py` — Layer 1 contract tests, deterministic fake-agent fixtures modeled on `packages/orchestrations/tests/test_handoff.py`'s `MockChatClient`/`MockHandoffAgent` pattern (5/5 passing).
-- `test/remote-maf-handoff-agents/Dockerfile`, `README.md`, `pyproject.toml`, `.gitignore` (new).
+- `remote-maf-handoff-agents/app/server.py` — FastAPI app, manifest + WS session, tool bridge, steer_to_agent handling.
+- `remote-maf-handoff-agents/app/protocol.py` — wire frame Pydantic models, shared contract WS2 will mirror in TypeScript.
+- `remote-maf-handoff-agents/app/orchestrator.py` — sample triage/billing/refunds HandoffBuilder workflow + manifest metadata.
+- `remote-maf-handoff-agents/app/telemetry.py` — OTel export to Phoenix, env-var gated.
+- `remote-maf-handoff-agents/app/main.py` — uvicorn ASGI entrypoint.
+- `remote-maf-handoff-agents/tests/test_server.py` — Layer 1 contract tests, deterministic fake-agent fixtures modeled on `packages/orchestrations/tests/test_handoff.py`'s `MockChatClient`/`MockHandoffAgent` pattern (5/5 passing).
+- `remote-maf-handoff-agents/Dockerfile`, `README.md`, `pyproject.toml`, `.gitignore` (new).
 
 Original plan (kept for reference; not the actual location used):
 - ~~`agent-framework/python/samples/05-end-to-end/opencode-handoff-bridge/server.py`~~
@@ -198,7 +198,7 @@ architecture instead:
 - `packages/core/src/session/runner/remote-tool-bridge.ts` (new, **not**
   `execution/remote-tool-bridge.ts` — same package-placement reasoning as WS2's runner; there is
   still no second execution-layer file). Exports a `NAME_MAP` (currently `run_local_command` →
-  `bash`, matching WS1's `test/remote-maf-handoff-agents/app/orchestrator.py`'s
+  `bash`, matching WS1's `remote-maf-handoff-agents/app/orchestrator.py`'s
   `run_local_command_tool`), an `execute()` function that resolves the mapped local tool name,
   translates the remote tool's `arguments` record into that tool's input shape, and calls
   `ToolRegistry.Service.materialize().settle(...)` — the exact same registry, permission gating
@@ -368,7 +368,7 @@ protocol that supports streaming — and does this significantly change the curr
 Verified against the current code (not speculative):
 
 - **The container is already the "agent host" exposing a service registry.** `create_app()`
-  (`test/remote-maf-handoff-agents/app/server.py:43-54`) builds a `registry: dict[str, OrchestratorSpec]`
+  (`remote-maf-handoff-agents/app/server.py:43-54`) builds a `registry: dict[str, OrchestratorSpec]`
   keyed by orchestrator id and exposes it as `GET /agents/manifest` — the same role Azure API
   Center's agent-card registration plays (a discoverable list of callable agents), just scoped to
   one container instead of a tenant-wide control plane. Azure API Center's own docs describe

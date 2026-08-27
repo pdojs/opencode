@@ -1,9 +1,10 @@
 # WS5 (compose-dev-env): local dev environment for the remote MAF handoff-bridge PoC.
 #
 # Starts:
-#   - bridge   — the WS1 FastAPI/WebSocket handoff-bridge container
-#                (test/remote-maf-handoff-agents), exposing GET /agents/manifest and
-#                WS /agents/{id}/session on :8000.
+#   - bridge   — the WS1 FastAPI/WebSocket handoff-bridge container, exposing
+#                GET /agents/manifest and WS /agents/{id}/session on :8000. The bridge app
+#                lives in its own repo, expected checked out beside this one as
+#                ../remote-maf-handoff-agents (see BRIDGE_CONTEXT below).
 #   - phoenix  — a local Arize Phoenix instance (official published image, SQLite-backed,
 #                no Postgres needed for this PoC) receiving OTel traces from `bridge` over
 #                OTLP/gRPC and exposing its UI on :6006.
@@ -31,7 +32,10 @@
 services:
   bridge:
     build:
-      context: ../../test/remote-maf-handoff-agents
+      # Defaults to a sibling checkout of the bridge repo; override BRIDGE_CONTEXT to point
+      # somewhere else. Resolved relative to this file: ../../.. is the directory holding the
+      # opencode checkout.
+      context: ${BRIDGE_CONTEXT:-../../../remote-maf-handoff-agents}
       dockerfile: Dockerfile
     ports:
       - "8000:8000"

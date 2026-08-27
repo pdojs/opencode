@@ -30,8 +30,8 @@ feature/remote-maf-handoff-agents -> dev`, not directly to `dev`, and `dev/<stor
 names are not possible in this repo (see status note). Original per-workstream naming, kept
 for reference:
 
-- `maf-container-server` (WS1) — **implemented as `test/remote-maf-handoff-agents/` inside the
-  `opencode` repo**, not a branch in `agent-framework`. See status note.
+- `maf-container-server` (WS1) — **implemented as a standalone Python app**, not a branch in
+  `agent-framework`. Now its own `remote-maf-handoff-agents` repo. See status note.
 - `remote-location-runner` (WS2, in `opencode` repo)
 - `remote-tool-bridge` (WS3, in `opencode` repo)
 - `agent-picker-ui` (WS4, in `opencode` repo)
@@ -64,16 +64,21 @@ Deviations from the original plan, made explicitly when implementation started:
   `feature/remote-maf-handoff-agents` (created off `dev`), not directly against `dev`. That
   feature branch will eventually be merged to `dev` once all workstreams land.
 - **WS1 location**: rather than a branch inside the `agent-framework` checkout, WS1 was built
-  as a standalone Python app at `test/remote-maf-handoff-agents/` inside the `opencode` repo
-  (per explicit instruction — "create a new test folder with the agentic app source code
-  there; we will eventually move this test case out of this workspace"). It depends on the
-  published PyPI packages `agent-framework-core`/`agent-framework-orchestrations`/
+  as a standalone Python app, initially at `test/remote-maf-handoff-agents/` inside the
+  `opencode` repo (per explicit instruction — "create a new test folder with the agentic app
+  source code there; we will eventually move this test case out of this workspace"). It depends
+  on the published PyPI packages `agent-framework-core`/`agent-framework-orchestrations`/
   `agent-framework-openai`, not a local path dependency on the `agent-framework` checkout, so
   it is portable and can be extracted into its own repo later without modification.
+  **That extraction has since happened**: the app now lives in its own
+  `remote-maf-handoff-agents` repo, expected checked out beside `opencode`. Every
+  `remote-maf-handoff-agents/...` path in this document is relative to that repo. The port
+  needed no code changes, as anticipated — only `docker-compose.yml`'s build context, which
+  now defaults to `../../../remote-maf-handoff-agents` and honours `BRIDGE_CONTEXT`.
 - **WS1 status**: implemented and merged into `story/maf-container-server`
   (PR: `feature/remote-maf-handoff-agents` <- `story/maf-container-server`, 3 commits — manifest
   + chat + tool bridge, OTel wiring, Dockerfile/README). 5/5 Layer 1 contract tests passing
-  (`python -m pytest tests/ -q` in `test/remote-maf-handoff-agents/`). `docker build` itself was
+  (`python -m pytest tests/ -q` in `remote-maf-handoff-agents/`). `docker build` itself was
   not exercised (no Docker daemon in the authoring environment) — packaging was instead
   verified via a non-editable `pip install .`; re-verify `docker build` before relying on the
   image for Layer 4 manual demos. **Merged (squash) into `feature/remote-maf-handoff-agents`.**
@@ -343,7 +348,7 @@ and `VERIFY.md` recorded Demo 3 rows 11-14 as blocked.
   `Map<SessionSchema.ID, RemoteConnection>`, not Location-scoped, so no Location plumbing was
   needed to expose it over HTTP.
 - The sample bridge turns a `steer_to_agent` frame into *turn text* and enqueues it as a new
-  turn (`test/remote-maf-handoff-agents/app/server.py` `_frame_to_turn_text`, which returns
+  turn (`remote-maf-handoff-agents/app/server.py` `_frame_to_turn_text`, which returns
   `"The user has requested you hand off to '<id>' now."`). It does **not** redirect the
   in-flight turn.
 - That last point was the latent bug: `remote-stream.ts`'s relay settled on the first
@@ -413,7 +418,7 @@ prose, not a selectable roster: the sub-agents were invisible and unaddressable.
 
 Three hard-coded assumptions, one per layer:
 
-1. `test/remote-maf-handoff-agents/app/orchestrator.py` — `_build_sample_support_workflow` called
+1. `remote-maf-handoff-agents/app/orchestrator.py` — `_build_sample_support_workflow` called
    `.with_start_agent(triage)` unconditionally, and `OrchestratorSpec.build` took only
    `run_local_command`, so nothing could express "start elsewhere".
 2. `packages/core/src/session/runner/remote.ts` — the sentinel was `remote:<server>:<orchestrator>`
@@ -450,12 +455,12 @@ surfacing them would have produced an unreadable list.
 
 ### Specific change surface
 
-- `test/remote-maf-handoff-agents/app/server.py` — `session(...)` takes `start_agent`, validates it,
+- `remote-maf-handoff-agents/app/server.py` — `session(...)` takes `start_agent`, validates it,
   passes it to `spec.build`.
-- `test/remote-maf-handoff-agents/app/orchestrator.py` — `OrchestratorSpec.build` takes
+- `remote-maf-handoff-agents/app/orchestrator.py` — `OrchestratorSpec.build` takes
   `start_agent`; new `participant_details` field feeds names/descriptions into `manifest_entry()`;
   `_build_sample_support_workflow` resolves the start agent from an `agents` dict.
-- `test/remote-maf-handoff-agents/app/protocol.py` — `Participant.description`.
+- `remote-maf-handoff-agents/app/protocol.py` — `Participant.description`.
 - `packages/core/src/session/execution/remote-protocol.ts` — mirrors `Participant.description`.
 - `packages/core/src/session/runner/remote.ts` — `remoteWorkspaceID`/`parseRemoteWorkspaceID` take
   the participant segment (split-based, replacing `indexOf`); `toWebSocketURL` appends
@@ -540,7 +545,7 @@ the environment before process start — never from Python afterwards.
 
 - `opecode-sprints/remote-maf-handoff-agents/docker-compose.yml` — `ENABLE_SENSITIVE_DATA`
   env var on the `bridge` service.
-- `test/remote-maf-handoff-agents/app/telemetry.py` — module docstring documents the two
+- `remote-maf-handoff-agents/app/telemetry.py` — module docstring documents the two
   switches; `configure_telemetry()` reads `OBSERVABILITY_SETTINGS.SENSITIVE_DATA_ENABLED` after
   installing the provider and warns when it is off.
 - `opecode-sprints/remote-maf-handoff-agents/VERIFY.md` — "Phoenix shows traces but empty
@@ -662,14 +667,14 @@ override.
 
 - `opecode-sprints/remote-maf-handoff-agents/docker-compose.yml` — `ENABLE_SENSITIVE_DATA`
   default and opt-in documentation.
-- `test/remote-maf-handoff-agents/app/protocol.py` — `OrchestratorManifestEntry` capability
+- `remote-maf-handoff-agents/app/protocol.py` — `OrchestratorManifestEntry` capability
   fields; consumed by `manifest_entry()` below.
-- `test/remote-maf-handoff-agents/app/orchestrator.py` — `PATTERN_SEMANTICS`; `OrchestratorSpec`
+- `remote-maf-handoff-agents/app/orchestrator.py` — `PATTERN_SEMANTICS`; `OrchestratorSpec`
   `pattern` / `context_scope_override`; `manifest_entry()` emits the fields;
   `_HANDOFF_COMPLIANCE_INSTRUCTION` made unconditional.
-- `test/remote-maf-handoff-agents/app/server.py` — `_tracer`; `session_id` query param; 4400
+- `remote-maf-handoff-agents/app/server.py` — `_tracer`; `session_id` query param; 4400
   refusal for non-addressable patterns; per-turn span; `_consume_workflow_events(..., engaged)`.
-- `test/remote-maf-handoff-agents/tests/test_server.py` — 9 tests.
+- `remote-maf-handoff-agents/tests/test_server.py` — 9 tests.
 - `packages/core/src/session/execution/remote-protocol.ts` — capability fields mirrored.
 - `packages/sdk/js/src/v2/gen/types.gen.ts` — regenerated, so the TUI sees `addressable`.
 - `packages/core/src/session/runner/remote.ts` — `REDIRECT_INSTRUCTION`; `pendingRedirect`,

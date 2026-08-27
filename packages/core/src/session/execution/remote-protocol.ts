@@ -4,7 +4,7 @@ import { Option, Schema } from "effect"
 
 /**
  * TypeScript mirror of the wire protocol implemented by the MAF handoff bridge server at
- * `test/remote-maf-handoff-agents/app/protocol.py`. This file is manually kept in sync with
+ * `remote-maf-handoff-agents/app/protocol.py`. This file is manually kept in sync with
  * that Python module — there is no codegen (deferred per design-proposal.md's Deferred
  * section). Update both sides together whenever a frame shape changes.
  */

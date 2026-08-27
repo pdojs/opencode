@@ -7,7 +7,7 @@ import { SessionRunnerRemote } from "@opencode-ai/core/session/runner/remote";
 import { SessionSchema } from "@opencode-ai/core/session/schema";
 
 /**
- * A stand-in for the MAF bridge (`test/remote-maf-handoff-agents/app/server.py`) speaking the
+ * A stand-in for the MAF bridge (`remote-maf-handoff-agents/app/server.py`) speaking the
  * real wire protocol over a real WebSocket, so the translation under test is exercised end to
  * end rather than against a mocked connection.
  */
@@ -76,7 +76,7 @@ const steerServer = Bun.serve({
       // Deterministic steer choreography: the first turn is deliberately left open until the
       // steer frame arrives, so the relay is guaranteed to still be mid-turn when it does.
       // Mirrors the real bridge, which answers a steer with a whole extra turn rather than
-      // redirecting the current one (`test/remote-maf-handoff-agents/app/server.py`).
+      // redirecting the current one (`remote-maf-handoff-agents/app/server.py`).
       if (frame.type === "user_message") {
         socket.send(JSON.stringify({ type: "assistant_delta", agent_id: "triage", text: "working on it" }));
         return;

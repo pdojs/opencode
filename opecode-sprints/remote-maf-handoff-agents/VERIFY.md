@@ -7,9 +7,14 @@ OpenAI-backed sample MAF handoff group — none of it faked or mocked.
 
 ## 0. Prerequisites
 
+- The bridge app, which lives in **its own repo** (`remote-maf-handoff-agents`), checked out
+  beside this one so that `../remote-maf-handoff-agents` resolves from the opencode checkout.
+  That is where `docker-compose.yml` looks for its build context by default; set
+  `BRIDGE_CONTEXT` to point elsewhere. Every `remote-maf-handoff-agents/...` path below is
+  relative to that repo, not to opencode.
 - Docker (with a running daemon) and Docker Compose v2 (`docker compose`, not `docker-compose`).
 - An `OPENAI_API_KEY` with access to a chat-completions-capable model (the sample agents in
-  `test/remote-maf-handoff-agents/app/orchestrator.py` are `OpenAIChatClient()`-backed —
+  `remote-maf-handoff-agents/app/orchestrator.py` are `OpenAIChatClient()`-backed —
   independent of whatever LLM endpoint the OpenCode harness itself uses).
 - A local OpenCode build from `feature/remote-maf-handoff-agents` (or later) — WS1-WS4 must all
   be present.
@@ -305,7 +310,7 @@ Straight against the bridge — state a fact, close the socket, reconnect with t
 `session_id`, ask for it back:
 
 ```bash
-cd test/remote-maf-handoff-agents
+cd ../remote-maf-handoff-agents   # sibling checkout of the bridge repo
 .venv/bin/python - <<'PY'
 import asyncio, json, websockets
 URL = "ws://localhost:8000/agents/support/session?session_id=probe-1"
@@ -365,7 +370,7 @@ agent still remembers what was said.
 Talking to one agent alone — no workflow, no handoffs, separate transcript.
 
 ```bash
-cd test/remote-maf-handoff-agents
+cd ../remote-maf-handoff-agents   # sibling checkout of the bridge repo
 .venv/bin/python - <<'PY'
 import asyncio, json, websockets
 SOLO = "ws://localhost:8000/agents/support/session?solo=true&start_agent=billing&session_id=demo-1"
