@@ -23,6 +23,15 @@ const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
 
+// `--os=linux --arch=x64` narrows a cross-build to a subset of targets. Unlike `--single` these
+// are not tied to the host, so you can build just the Linux binaries from macOS or Windows.
+// The target list stores Node's `win32`, but artifacts are named `windows`; accept either.
+const normalizeOS = (value?: string) => (value === "win32" ? "windows" : value)
+const flagValue = (name: string) =>
+  process.argv.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3)
+const osFilter = normalizeOS(flagValue("os"))
+const archFilter = flagValue("arch")
+
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
@@ -132,7 +141,19 @@ const targets = singleFlag
 
       return true
     })
-  : allTargets
+  : allTargets.filter((item) => {
+      if (osFilter && normalizeOS(item.os) !== osFilter) return false
+      if (archFilter && item.arch !== archFilter) return false
+      return true
+    })
+
+if (targets.length === 0) {
+  console.error(
+    `No targets match --os=${osFilter ?? "*"} --arch=${archFilter ?? "*"}. ` +
+      `Available: ${[...new Set(allTargets.map((item) => `${normalizeOS(item.os)}-${item.arch}`))].join(", ")}`,
+  )
+  process.exit(1)
+}
 
 await $`rm -rf dist`
 
